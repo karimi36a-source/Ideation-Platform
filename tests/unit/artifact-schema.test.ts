@@ -1,0 +1,11 @@
+import {it,expect} from "vitest";
+import {artifactSchema,artifactTypeSchema} from "@/features/artifacts/schema";
+const id="00000000-0000-4000-8000-000000006004",stamp="2026-10-07T00:00:00Z";
+const row={id,project_id:id,workspace_id:id,artifact_type:"PROBLEM_BANK",title:"Problem Bank",status:"ACTIVE",current_version_id:null,created_by:id,activity_instance_id:null,review_required:false,approval_required:false,created_at:stamp,updated_at:stamp,archived_at:null};
+it.each(artifactTypeSchema.options)("M8.1 accepts approved type %s",artifact_type=>expect(artifactSchema.safeParse({...row,artifact_type}).success).toBe(true));
+it.each(["DRAFT","SUBMITTED","UNDER_REVIEW","REVISION_REQUESTED","APPROVED","CURRENT","SUPERSEDED","VERIFIED","active"])("M8.1 rejects non-identity status %s",status=>expect(artifactSchema.safeParse({...row,status}).success).toBe(false));
+it.each(["CUSTOM","BUSINESS_CASE","FUNDING_STRATEGY","arbitrary"])("M8.1 rejects unapproved type %s",artifact_type=>expect(artifactSchema.safeParse({...row,artifact_type}).success).toBe(false));
+it.each([{status:"ARCHIVED"},{archived_at:stamp},{title:" "},{project_id:null},{workspace_id:null},{created_by:null},{review_required:null},{approval_required:null},{content:"Version content"},{approved_by:id}])("M8.1 rejects invalid identity shape %j",patch=>expect(artifactSchema.safeParse({...row,...patch}).success).toBe(false));
+it("M8.1 supports null pointer and nullable compatible provenance shape",()=>expect(artifactSchema.parse({...row,activity_instance_id:id}).current_version_id).toBeNull());
+it("M8.1 requirement flags do not mean approval",()=>expect(artifactSchema.parse({...row,review_required:true,approval_required:true}).status).toBe("ACTIVE"));
+it("M8.1 archived identity remains representable",()=>expect(artifactSchema.parse({...row,status:"ARCHIVED",archived_at:stamp}).id).toBe(id));

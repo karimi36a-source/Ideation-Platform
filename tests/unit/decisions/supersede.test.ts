@@ -1,0 +1,17 @@
+import {it,expect,vi,beforeEach} from "vitest";
+vi.mock("server-only",()=>({}));
+const state=vi.hoisted(()=>({rpc:vi.fn(),auth:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:state.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {supersedeDecision} from "@/features/decisions/supersede";
+const id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",actor="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const input={oldDecisionId:id,newDecisionId:actor};
+const result={id,decision_id:actor,linked_entity_type:"DECISION",linked_entity_id:id,relationship_type:"SUPERSEDES"};
+beforeEach(()=>{state.rpc.mockReset();state.auth.mockReset();state.auth.mockResolvedValue({userId:actor});state.rpc.mockResolvedValue({data:result,error:null});});
+it("returns only canonical persisted Link",async()=>{expect(await supersedeDecision(input)).toEqual(result);expect(state.rpc).toHaveBeenCalledExactlyOnceWith("supersede_decision",{input});});
+it.each(["userId","role","projectId","workspaceId","teamId","createdBy","status","targetOwnerUserId","permissions","accessGrant"])("rejects additional %s",async key=>{await expect(supersedeDecision({...input,[key]:id})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([{oldDecisionId:actor},{newDecisionId:"invalid"},{oldDecisionId:"invalid"},{oldDecisionId:id.toUpperCase(),newDecisionId:id}])("rejects self/invalid input %j",async patch=>{await expect(supersedeDecision({...input,...patch})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([["40001","CONFLICT"],["42501","NOT_FOUND"],["23503","NOT_FOUND"],["55000","INVALID_STATE"],["22023","VALIDATION_ERROR"],["28000","AUTH_REQUIRED"]])("maps provider %s without leaking",async(code,expected)=>{state.rpc.mockResolvedValue({error:{code,message:"Private target details"}});await expect(supersedeDecision(input)).rejects.toMatchObject({code:expected});});
+it("anonymous never reaches RPC",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");state.auth.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(supersedeDecision(input)).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(state.rpc).not.toHaveBeenCalled();});
+it("changed identity never reaches RPC",async()=>{state.auth.mockResolvedValueOnce({userId:actor}).mockResolvedValue({userId:id});await expect(supersedeDecision(input)).rejects.toMatchObject({code:"NOT_FOUND"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([{decision_id:id},{linked_entity_id:actor},{relationship_type:"INFORMED_BY"},{linked_entity_type:"ARTIFACT"},{secret:"private"}])("rejects noncanonical response %j",async patch=>{state.rpc.mockResolvedValue({data:{...result,...patch},error:null});await expect(supersedeDecision(input)).rejects.toMatchObject({code:"NOT_FOUND"});});

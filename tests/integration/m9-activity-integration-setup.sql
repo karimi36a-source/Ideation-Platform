@@ -1,0 +1,30 @@
+reset role;
+create temporary table m914_activities(n int primary key,payload jsonb);
+create temporary table m914_entries(n int primary key,payload jsonb);
+create temporary table m914_ideas(n int primary key,payload jsonb);
+grant select,insert on m914_activities,m914_entries,m914_ideas to authenticated;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006004',true);
+insert into m914_activities select n,public.start_activity(('00000000-0000-4000-8000-'||lpad((914800+n)::text,12,'0'))::uuid,(payload->>'id')::uuid,(payload->>'primary_workspace_id')::uuid) from logged_projects cross join generate_series(1,6) n where label='Individual';
+insert into m914_entries select n,case when n<=3 then public.create_scamper_entry((payload#>>'{activity,id}')::uuid,'SUBSTITUTE','Original','M9.14 proposal','Result') else public.create_brainstorm_entry((payload#>>'{activity,id}')::uuid,'M9.14 private idea','private') end from m914_activities;
+insert into m914_ideas select n,case when n<=3 then public.promote_scamper_entry_to_idea((payload->>'id')::uuid) else public.promote_brainstorm_entry_to_idea((payload->>'id')::uuid) end from m914_entries;
+reset role;
+select set_config('request.jwt.claim.sub','',true);
+
+-- Raw unpromoted sources must be discoverable from the canonical Activity ID.
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006004',true);
+select public.create_scamper_entry((select (payload#>>'{activity,id}')::uuid from m914_activities where n=1),'COMBINE','Unpromoted','Unpromoted persisted source','Unpromoted');
+reset role;
+update public.teams set status='active' where id in(select (payload->>'teamId')::uuid from acceptance_teams);
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006005',true);
+insert into m914_activities select n,public.start_activity(('00000000-0000-4000-8000-'||lpad((914800+n)::text,12,'0'))::uuid,(p.payload->>'id')::uuid,(p.payload->>'primary_workspace_id')::uuid,(t.payload->>'teamId')::uuid) from logged_projects p cross join acceptance_teams t cross join generate_series(7,8)n where p.label='Team' and t.label='A';
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006004',true);
+insert into m914_entries select n,case when n=7 then public.create_scamper_entry((payload#>>'{activity,id}')::uuid,'SUBSTITUTE','Team original','M9.14 Team proposal','Team result') else public.create_brainstorm_entry((payload#>>'{activity,id}')::uuid,'M9.14 Team idea','private') end from m914_activities where n in(7,8);
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006005',true);
+select public.reveal_brainstorm_entries((select (payload#>>'{activity,id}')::uuid from m914_activities where n=8),array[(select (payload->>'id')::uuid from m914_entries where n=8)]);
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006004',true);
+insert into m914_ideas select n,case when n=7 then public.promote_scamper_entry_to_idea((payload->>'id')::uuid) else public.promote_brainstorm_entry_to_idea((payload->>'id')::uuid) end from m914_entries where n in(7,8);
+reset role;
+select set_config('request.jwt.claim.sub','',true);

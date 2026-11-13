@@ -1,0 +1,23 @@
+import {beforeEach,expect,it,vi} from "vitest";
+import {classifyMindMapNodeSchema} from "@/features/mind-map/classification-schema";
+const auth=vi.hoisted(()=>vi.fn());const rpc=vi.hoisted(()=>vi.fn());
+vi.mock("server-only",()=>({}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<object>(),getAuthorizationContext:auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {classifyMindMapNode} from "@/features/mind-map/classification";
+const id="00000000-0000-4000-8000-000000000001";
+const input={nodeId:id,expectedRevision:2,expectedObjectRevision:4,classification:"CORE"};
+beforeEach(()=>{vi.resetAllMocks();auth.mockResolvedValue({userId:id});});
+it.each(["CORE","SUPPORTING","OPTIONAL_FUTURE",null])("supports exact classification %s",classification=>expect(classifyMindMapNodeSchema.parse({...input,classification})).toEqual({...input,classification}));
+it.each(["core","SUPPORT",1,"",true,undefined])("rejects invalid classification %s",classification=>expect(classifyMindMapNodeSchema.safeParse({...input,classification}).success).toBe(false));
+it.each(["projectId","workspaceId","teamId","objectId","createdBy","status","force","snapshot","grant"])("rejects supplied %s",async field=>{await expect(classifyMindMapNode({...input,[field]:id})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it.each([-1,0.2,"4",undefined,Number.MAX_SAFE_INTEGER+1])("requires independent Object CAS %s",value=>expect(classifyMindMapNodeSchema.safeParse({...input,expectedObjectRevision:value}).success).toBe(false));
+it("accepts null Object token for an unlinked node",()=>expect(classifyMindMapNodeSchema.safeParse({...input,expectedObjectRevision:null}).success).toBe(true));
+it.each([["40001","CONFLICT"],["55000","DEPENDENCY_NOT_READY"],["42501","NOT_FOUND"],["28000","AUTH_REQUIRED"],["22023","VALIDATION_ERROR"]])("maps SQLSTATE %s safely",async(code,expected)=>{rpc.mockResolvedValue({error:{code,message:"Private Team data"}});await expect(classifyMindMapNode(input)).rejects.toMatchObject({code:expected});});
+it("rejects actor drift before calling the RPC",async()=>{auth.mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:"other"});await expect(classifyMindMapNode(input)).rejects.toMatchObject({code:"NOT_FOUND"});expect(rpc).not.toHaveBeenCalled();});
+const result={id,mind_map_id:id,node_type:"COMPONENT",label:"Human-authored C1",development_object_id:id,parent_node_id:null,position_data:{x:1,y:2},metadata:{},created_by:id,edit_revision:3,product_classification:"CORE"};
+it("returns canonical persisted node without a synthetic wrapper",async()=>{rpc.mockResolvedValue({data:result,error:null});await expect(classifyMindMapNode(input)).resolves.toEqual(result);expect(rpc).toHaveBeenCalledWith("classify_mind_map_node",{input});});
+it("rejects wrong canonical classification",async()=>{rpc.mockResolvedValue({data:{...result,product_classification:"SUPPORTING"},error:null});await expect(classifyMindMapNode(input)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it("rejects actor drift after the RPC",async()=>{auth.mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:"other"});rpc.mockResolvedValue({data:result,error:null});await expect(classifyMindMapNode(input)).rejects.toMatchObject({code:"NOT_FOUND"});});
+
+it('normalizes accepted uppercase UUIDs before checking canonical response identity',()=>{const mixed='A0000000-0000-4000-8000-000000000001';expect(classifyMindMapNodeSchema.parse({...input,nodeId:mixed}).nodeId).toBe(mixed.toLowerCase());});

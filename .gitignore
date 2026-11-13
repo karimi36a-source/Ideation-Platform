@@ -1,0 +1,33 @@
+# Dependencies and local package stores
+node_modules/
+.pnpm-store/
+
+# Build output and generated TypeScript metadata
+.next/
+out/
+build/
+*.tsbuildinfo
+next-env.d.ts
+
+# Local environment files and credentials
+.env*
+!.env.example
+*.pem
+*.key
+
+# Logs and local tooling
+*.log
+.vercel/
+.DS_Store
+Thumbs.db
+
+# Supabase local runtime metadata
+/supabase/.temp/
+/supabase/.branches/
+/.supabase/
+
+# Automated test output
+/coverage/
+/playwright-report/
+/test-results/
+/playwright/.cache/

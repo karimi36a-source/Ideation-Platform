@@ -1,0 +1,24 @@
+import {beforeEach,expect,it,vi} from "vitest";
+vi.mock("server-only",()=>({}));
+const {context,rpc,notify}=vi.hoisted(()=>({context:vi.fn(),rpc:vi.fn(),notify:vi.fn()}));
+vi.mock("@/features/notifications/submission",()=>({notifySubmissionReceived:notify}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:context}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {submitArtifact} from "@/features/artifacts/submit";
+import {submitArtifactSchema,submissionSchema} from "@/features/artifacts/submission-schema";
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
+const input={artifactId:id(1),artifactVersionId:id(2),activityInstanceId:id(3)};
+const row={id:id(4),artifact_id:id(1),artifact_version_id:id(2),activity_instance_id:id(3),submitted_by:id(5),reviewer_user_id:id(6),submitted_at:"2026-10-07T00:00:00Z",status:"SUBMITTED"};
+beforeEach(()=>{notify.mockReset();context.mockReset().mockResolvedValue({userId:id(5)});rpc.mockReset().mockResolvedValue({data:row,error:null});});
+it("calls one atomic RPC with only exact resource IDs",async()=>{expect(await submitArtifact(input)).toEqual(row);expect(rpc).toHaveBeenCalledWith("submit_artifact",{target_artifact:id(1),target_version:id(2),target_activity:id(3)});expect(notify).toHaveBeenCalledExactlyOnceWith(row.id);expect(rpc.mock.invocationCallOrder[0]).toBeLessThan(notify.mock.invocationCallOrder[0]);});
+it.each(["submittedBy","reviewerUserId","submittedAt","submissionId","submissionStatus","versionStatus","approvedBy","role","ownerUserId"])("rejects spoofed %s",async key=>{await expect(submitArtifact({...input,[key]:id(5)})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("requires Activity ID",()=>expect(submitArtifactSchema.safeParse({artifactId:id(1),artifactVersionId:id(2)}).success).toBe(false));
+it.each(["SUBMITTED","UNDER_REVIEW","REVISION_REQUESTED","APPROVED","REJECTED"])("controlled schema supports %s",status=>expect(submissionSchema.safeParse({...row,status}).success).toBe(true));
+it("rejects self-review structurally",()=>expect(submissionSchema.safeParse({...row,reviewer_user_id:id(5)}).success).toBe(false));
+it("requires verified session",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");context.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(submitArtifact(input)).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(rpc).not.toHaveBeenCalled();});
+it.each(["submitted_by","artifact_id","artifact_version_id","activity_instance_id"])("rejects mismatched canonical %s",async key=>{rpc.mockResolvedValue({data:{...row,[key]:id(99)},error:null});await expect(submitArtifact(input)).rejects.toMatchObject({code:"FORBIDDEN"});});
+it("hides provider diagnostics",async()=>{rpc.mockResolvedValue({error:{code:"42501",message:"private"}});await expect(submitArtifact(input)).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});});
+it("rejects actor changing during RPC",async()=>{context.mockResolvedValueOnce({userId:id(5)}).mockResolvedValue({userId:id(99)});await expect(submitArtifact(input)).rejects.toMatchObject({code:"FORBIDDEN"});});
+
+it.each(['42501','23505','23514'])('failed/duplicate/rolled-back command %s never notifies',async code=>{rpc.mockResolvedValue({data:null,error:{code}});await expect(submitArtifact(input)).rejects.toThrow();expect(notify).not.toHaveBeenCalled();});
+it('spoofed recipient fields never reach notification hook',async()=>{await expect(submitArtifact({...input,recipientUserId:id(6)})).rejects.toMatchObject({code:'VALIDATION_ERROR'});expect(notify).not.toHaveBeenCalled();});

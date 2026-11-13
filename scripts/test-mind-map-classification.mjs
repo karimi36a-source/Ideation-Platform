@@ -1,0 +1,102 @@
+import {spawn,spawnSync} from "node:child_process";
+export async function testMindMapClassification({run,args,binary,childEnv,root}){
+ const name="fici_mind_map_classification";run("psql",[...args,"-c",`create database ${name} template postgres`]);
+ const db=args.map((v,i)=>args[i-1]==="-d"?name:v);
+ const a1="00000000-0000-4000-8000-000000006004",a2="00000000-0000-4000-8000-000000006005",master="00000000-0000-4000-8000-000000006002";
+ const call=(actor,expression,before="")=>new Promise((resolve,reject)=>{
+  const child=spawn(binary("psql"),[...db,"--set=VERBOSITY=verbose","-t","-A","-f","-"],{cwd:root,env:childEnv,windowsHide:true});let out="",err="";
+  const timer=setTimeout(()=>{child.kill();reject(Error("Node fixture timeout"));},60000);
+  child.stdout.on("data",x=>out+=x);child.stderr.on("data",x=>err+=x);child.on("error",e=>{clearTimeout(timer);reject(e);});
+  child.on("close",code=>{clearTimeout(timer);if(code!==0){const state=err.match(/ERROR:\s+([0-9A-Z]{5}):/);return state?resolve({code:state[1]}):reject(Error(err));}const line=out.split(/\r?\n/).find(x=>x.startsWith("RESULT="));if(!line)return reject(Error("Missing result"));resolve({code:"00000",data:JSON.parse(line.slice(7))});});
+  child.stdin.end(`begin;set local statement_timeout='50s';set local role authenticated;select set_config('request.jwt.claim.sub','${actor}',true);${before}select 'RESULT='||(${expression})::text;select pg_sleep(0.05);commit;`);
+ });
+ const ok=x=>{if(x.code!=="00000")throw Error("Unexpected SQLSTATE "+x.code);return x.data;};
+ const deny=(x,code="42501")=>{if(x.code!==code||x.data!==undefined)throw Error("Expected "+code+" got "+x.code);};
+ const sql=x=>JSON.parse(run("psql",[...db,"-t","-A","-c",`select (${x})::text;`]).trim());
+ const write=x=>run("psql",[...db,"-c",x]);
+ const rpc=(actor,fn,input)=>call(actor,`public.${fn}('${JSON.stringify(input).replaceAll("'","''")}'::jsonb)`);
+ try{
+  const generated=spawnSync(process.execPath,['scripts/mind-map-browser-fixture.mjs'],{cwd:root,encoding:'utf8',windowsHide:true});
+  if(generated.status!==0)throw Error('Checkpoint fixture unavailable');
+  const setup=generated.stdout.split('update auth.users set')[0].replace(/update public\.artifact_versions set status='SUBMITTED'[\s\S]*?;/,'');
+  run('psql',[...db,'-f','-'],setup+'commit;');
+  const fixture=sql(`(select jsonb_object_agg(key,value) from public.mind_map_browser_fixture)`);
+  const m=fixture.map.mindMap,v=fixture.map.version,scope=fixture.scope;
+
+  const objectId=fixture.object_component.id,n1=fixture.node_component;
+  const activity=sql(`(select to_jsonb(activity_instance_id) from public.artifacts where id='${m.artifact_id}')`);
+  const view=async()=>ok(await call(a1,`public.get_mind_map_editor('${activity}')`));
+  const object=()=>sql(`(select to_jsonb(x) from public.development_objects x where id='${objectId}')`);
+  const version=id=>sql(`(select content_snapshot from public.artifact_versions where id='${id}')`);
+  const cls=(actor,node,value,objectRev)=>rpc(actor,'classify_mind_map_node',{nodeId:node.id,expectedRevision:node.edit_revision,expectedObjectRevision:objectRev,classification:value});
+  const count=sql(`(select to_jsonb(count(*)) from public.development_objects)`),initialObject=object();
+  let n2=ok(await rpc(a1,'add_mind_map_node',{mindMapId:m.id,nodeType:'COMPONENT',label:'Same C1, second authorized view',developmentObjectId:objectId,positionData:{x:300,y:80}}));
+  ok(await cls(a1,n1,'CORE',0));
+  if(object().product_classification!=='CORE'||object().classification_revision!==1)throw Error('Canonical Object was not classified');
+  let current=await view();
+  if(current.nodes.filter(n=>n.development_object_id===objectId).some(n=>n.product_classification!=='CORE'))throw Error('Current linked views diverge');
+  if(JSON.stringify(version(v.id))!==JSON.stringify(v.content_snapshot))throw Error('Classification silently rewrote snapshot');
+  deny(await cls(a2,n2,'SUPPORTING',0),'40001');
+  if(object().product_classification!=='CORE')throw Error('Stale second node overwrote canonical state');
+  const saved=ok(await rpc(a1,'save_mind_map_draft',{mindMapId:m.id,expectedDraftRevision:0}));
+  const v1=version(v.id);
+  if(v1.nodes.filter(n=>n.developmentObjectId===objectId).some(n=>n.productClassification!=='CORE'))throw Error('Explicit save lost classification');
+  const next=ok(await rpc(a1,'create_mind_map_version',{mindMapId:m.id,expectedDraftRevision:saved.draftRevision,changeSummary:'Classification checkpoint'}));
+  const v2before=version(next.version.id);
+  current=await view();let node=current.nodes.find(n=>n.development_object_id===objectId);
+  ok(await cls(a1,node,'SUPPORTING',1));
+  if(object().product_classification!=='SUPPORTING'||JSON.stringify(version(next.version.id))!==JSON.stringify(v2before))throw Error('Current/Draft separation failed');
+  current=await view();if(current.nodes.filter(n=>n.development_object_id===objectId).some(n=>n.product_classification!=='SUPPORTING'))throw Error('N2 did not resolve SUPPORTING');
+  deny(await rpc(a1,'create_mind_map_version',{mindMapId:next.mindMap.id,expectedDraftRevision:0,changeSummary:null}),'55000');
+  ok(await rpc(a2,'save_mind_map_draft',{mindMapId:next.mindMap.id,expectedDraftRevision:0}));
+  const v2=version(next.version.id);
+  if(v2.nodes.filter(n=>n.developmentObjectId===objectId).some(n=>n.productClassification!=='SUPPORTING'))throw Error('V2 save did not capture current classification');
+  const third=ok(await rpc(a1,'create_mind_map_version',{mindMapId:next.mindMap.id,expectedDraftRevision:1,changeSummary:'Freeze V2'}));
+  deny(await rpc(a1,'save_mind_map_draft',{mindMapId:next.mindMap.id,expectedDraftRevision:1}),'55000');
+  current=await view();node=current.nodes.find(n=>n.development_object_id===objectId);
+  const r=object().classification_revision;
+  const race=await Promise.all([cls(a1,node,'CORE',r),cls(a2,current.nodes.find(n=>n.development_object_id===objectId&&n.id!==node.id),'OPTIONAL_FUTURE',r)]);
+  if(race.filter(x=>x.code==='00000').length!==1||race.filter(x=>x.code==='40001').length!==1)throw Error('Canonical Object CAS race had no explicit single winner '+JSON.stringify(race));
+  if(JSON.stringify(version(v.id))!==JSON.stringify(v1)||JSON.stringify(version(next.version.id))!==JSON.stringify(v2))throw Error('Historical snapshots rewritten');
+  ok(await rpc(a1,'save_mind_map_draft',{mindMapId:third.mindMap.id,expectedDraftRevision:0}));
+  const after=object();
+  for(const key of ['id','project_id','workspace_id','object_type','status','verification_status','origin_type','origin_reference_id','created_by','created_at','current_version_number','archived_at','title','content','metadata'])if(JSON.stringify(after[key])!==JSON.stringify(initialObject[key]))throw Error('Classification changed Object lifecycle/provenance '+key);
+  if(sql(`(select to_jsonb(count(*)) from public.development_objects)`)!==count)throw Error('Object duplicated');
+  current=await view();node=current.nodes.find(n=>n.development_object_id===objectId);
+  for(const actor of [master,'00000000-0000-4000-8000-000000006007'])deny(await cls(actor,node,'CORE',after.classification_revision));
+  deny(await cls('',node,'CORE',after.classification_revision),'28000');
+  deny(await rpc(a1,'classify_mind_map_node',{nodeId:node.id,expectedRevision:node.edit_revision,expectedObjectRevision:after.classification_revision,classification:'custom'}),'22023');
+  deny(await rpc(a1,'classify_mind_map_node',{nodeId:node.id,expectedRevision:node.edit_revision,expectedObjectRevision:after.classification_revision,classification:'CORE',actor:master}),'22023');
+  // Unlinked values propagate on first link; contradictory existing values reject.
+  let unlinked=ok(await rpc(a1,'add_mind_map_node',{mindMapId:third.mindMap.id,nodeType:'SYSTEM',label:'Human-authored System',positionData:{x:5,y:9}}));
+  unlinked=ok(await cls(a1,unlinked,'OPTIONAL_FUTURE',null));
+  const system=current.objects.find(o=>o.object_type==='SYSTEM');
+  if(!system)throw Error('System fixture missing');
+  ok(await rpc(a1,'update_mind_map_node',{nodeId:unlinked.id,expectedRevision:unlinked.edit_revision,developmentObjectId:system.id}));
+  if(sql(`(select to_jsonb(product_classification) from public.development_objects where id='${system.id}')`)!=='OPTIONAL_FUTURE')throw Error('Unlinked classification did not propagate');
+  let conflicting=ok(await rpc(a1,'add_mind_map_node',{mindMapId:third.mindMap.id,nodeType:'SYSTEM',label:'Conflicting human choice',positionData:{x:1,y:2}}));
+  conflicting=ok(await cls(a1,conflicting,'CORE',null));
+  deny(await rpc(a1,'update_mind_map_node',{nodeId:conflicting.id,expectedRevision:conflicting.edit_revision,developmentObjectId:system.id}),'40001');
+  // Clearing is nullable, atomic, and leaves old snapshots unchanged.
+  current=await view();node=current.nodes.find(n=>n.development_object_id===objectId);
+  ok(await cls(a1,node,null,object().classification_revision));
+  if(object().product_classification!==null)throw Error('Canonical clear failed');
+  if((await view()).nodes.filter(n=>n.development_object_id===objectId).some(n=>n.product_classification!==null))throw Error('Current clear did not reconcile');
+  const whole=()=>sql(`jsonb_build_object('object',(select to_jsonb(x) from public.development_objects x where id='${objectId}'),'nodes',(select jsonb_agg(to_jsonb(n) order by id) from public.mind_map_nodes n),'logs',(select jsonb_agg(to_jsonb(c) order by id) from public.change_log c))`);
+  const beforeFail=JSON.stringify(whole());
+  write(`create function public.classification_failure() returns trigger language plpgsql as $$begin raise exception 'test rollback' using errcode='P0001';end$$;create constraint trigger classification_failure after update on public.mind_map_nodes deferrable initially deferred for each row execute function public.classification_failure();`);
+  current=await view();node=current.nodes.find(n=>n.development_object_id===objectId);
+  deny(await cls(a1,node,'CORE',object().classification_revision),'P0001');
+  if(JSON.stringify(whole())!==beforeFail)throw Error('Partial classification/history survived rollback');
+  write('drop trigger classification_failure on public.mind_map_nodes;drop function public.classification_failure();');
+  // Real normal-client direct mutation uses a statement before the result.
+  deny(await call(a1,`'true'::jsonb`,`update public.development_objects set product_classification='CORE' where id='${objectId}';`));
+  deny(await call(a1,`'true'::jsonb`,`update public.mind_map_nodes set product_classification='CORE' where id='${node.id}';`));
+  ok(await call(master,`public.remove_team_member('${scope.teamId}','${a1}')`));
+  deny(await cls(a1,node,'CORE',object().classification_revision));
+  if(JSON.stringify(version(v.id))!==JSON.stringify(v1)||JSON.stringify(version(next.version.id))!==JSON.stringify(v2))throw Error('History changed after revocation');
+  if(!sql(`(select to_jsonb(prosecdef and proconfig @> array['search_path=""']) from pg_proc where oid='public.classify_mind_map_node(jsonb)'::regprocedure)`))throw Error('Unsafe definer');
+  if(sql(`to_jsonb(has_function_privilege('anon','public.classify_mind_map_node(jsonb)','execute') or has_function_privilege('service_role','public.classify_mind_map_node(jsonb)','execute'))`))throw Error('Excess execute grant');
+  console.log('M11.16 canonical C1/N1/N2 / newest Draft save / V1-V2 freeze / V3 save / Object-node CAS / rollback / nullable clear / link reconciliation / lifecycle / privacy PASS');
+ }finally{run('psql',[...args,'-c',`drop database ${name} with (force)`]);}
+}

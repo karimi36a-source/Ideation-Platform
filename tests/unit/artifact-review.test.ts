@@ -1,0 +1,47 @@
+import {beforeEach,expect,it,vi} from "vitest";
+vi.mock("server-only",()=>({}));
+const commentNotify=vi.hoisted(()=>vi.fn());
+vi.mock("@/features/notifications/comment",()=>({notifyCommentReceived:commentNotify}));
+const {context,rpc,notify}=vi.hoisted(()=>({context:vi.fn(),rpc:vi.fn(),notify:vi.fn()}));
+vi.mock("@/features/notifications/revision",()=>({notifyRevisionRequested:notify}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:context}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {startReview,addFeedback,requestRevision} from "@/features/artifacts/review";
+import {addFeedbackSchema,feedbackSchema,reviewActionTypeSchema,feedbackTypeSchema} from "@/features/artifacts/review-schema";
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;const stamp="2026-10-07T00:00:00Z";
+const s={id:id(1),artifact_id:id(2),artifact_version_id:id(3),activity_instance_id:id(4),submitted_by:id(5),reviewer_user_id:id(6),submitted_at:stamp,status:"UNDER_REVIEW"};
+const input={targetEntityType:"ARTIFACT",targetEntityId:id(2),targetVersionId:id(3),feedbackType:"COMMENT",content:" Feedback "};
+const f={id:id(8),submission_id:id(1),project_id:id(9),target_entity_type:"ARTIFACT",target_entity_id:id(2),target_version_id:id(3),author_user_id:id(6),feedback_type:"COMMENT",content:"Feedback",status:"OPEN",created_at:stamp,resolved_at:null};
+beforeEach(()=>{commentNotify.mockReset();notify.mockReset();context.mockReset().mockResolvedValue({userId:id(6)});rpc.mockReset().mockImplementation(async name=>({data:name==="start_review"?s:f,error:null}));});
+it("starts through identity-safe scalar RPC and supports canonical retry",async()=>{expect(await startReview(id(1))).toEqual(s);expect(await startReview(id(1))).toEqual(s);expect(rpc).toHaveBeenCalledWith("start_review",{target_submission:id(1)});});
+it("rejects reviewer/actor/state spoofing on review start",async()=>{await expect(startReview({submissionId:id(1),reviewerUserId:id(6),status:"UNDER_REVIEW"})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("creates trimmed Feedback with only approved caller fields",async()=>{expect(await addFeedback(input)).toEqual(f);expect(rpc).toHaveBeenCalledWith("add_feedback",{target_kind:"ARTIFACT",target_entity:id(2),target_version:id(3),kind:"COMMENT",body:"Feedback"});});
+it.each(["authorUserId","projectId","submissionId","status","resolvedAt","createdAt","role"])("rejects spoofed %s",async key=>{await expect(addFeedback({...input,[key]:id(99)})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it.each(["COMMENT","QUESTION","CORRECTION","SUGGESTION","WARNING"])("accepts allowed %s",type=>expect(addFeedbackSchema.safeParse({...input,feedbackType:type}).success).toBe(true));
+it.each(["REVISION_REQUEST","APPROVAL_NOTE","CUSTOM"])("rejects reserved/arbitrary %s",async type=>{await expect(addFeedback({...input,feedbackType:type})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("supports nullable Artifact-level target without inventing Version",async()=>{rpc.mockResolvedValue({data:{...f,target_version_id:null},error:null});expect((await addFeedback({...input,targetVersionId:undefined})).target_version_id).toBeNull();expect(rpc).toHaveBeenCalledWith("add_feedback",expect.objectContaining({target_version:null}));});
+it("supports canonical Development Object targeting",async()=>{rpc.mockResolvedValue({data:{...f,target_entity_type:"DEVELOPMENT_OBJECT"},error:null});expect((await addFeedback({...input,targetEntityType:"DEVELOPMENT_OBJECT"})).target_entity_type).toBe("DEVELOPMENT_OBJECT");});
+it("rejects whitespace-only content",async()=>{await expect(addFeedback({...input,content:" \t \n "})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("maps ambiguous review context to stable validation failure",async()=>{rpc.mockResolvedValue({error:{code:"22023",message:"Private review context"}});await expect(addFeedback(input)).rejects.toMatchObject({code:"VALIDATION_ERROR"});});
+it.each([()=>startReview(id(1)),()=>addFeedback(input)])("requires verified authentication",async call=>{const {AuthorizationError}=await import("@/lib/auth/authorization");context.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(call()).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(rpc).not.toHaveBeenCalled();});
+it.each([()=>startReview(id(1)),()=>addFeedback(input)])("hides inaccessible IDs/provider details",async call=>{rpc.mockResolvedValue({error:{code:"42501",message:"Private metadata"}});await expect(call()).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});});
+it.each([()=>startReview(id(1)),()=>addFeedback(input)])("fails closed after identity changes",async call=>{context.mockResolvedValueOnce({userId:id(6)}).mockResolvedValue({userId:id(99)});await expect(call()).rejects.toMatchObject({code:"FORBIDDEN"});});
+it("rejects returned review state/reviewer mismatch",async()=>{rpc.mockResolvedValue({data:{...s,reviewer_user_id:id(99)}});await expect(startReview(id(1))).rejects.toMatchObject({code:"FORBIDDEN"});});
+it.each(["author_user_id","target_entity_id","target_version_id"])("rejects mismatched Feedback %s",async key=>{rpc.mockResolvedValue({data:{...f,[key]:id(99)}});await expect(addFeedback(input)).rejects.toMatchObject({code:"FORBIDDEN"});});
+it("enforces OPEN/RESOLVED timestamp schema invariants",()=>{expect(feedbackSchema.safeParse(f).success).toBe(true);expect(feedbackSchema.safeParse({...f,resolved_at:stamp}).success).toBe(false);expect(feedbackSchema.safeParse({...f,status:"RESOLVED"}).success).toBe(false);expect(feedbackSchema.safeParse({...f,status:"RESOLVED",resolved_at:stamp}).success).toBe(true);});
+it("has exact structural action/type vocabulary",()=>{expect(reviewActionTypeSchema.options).toEqual(["STARTED_REVIEW","COMMENTED","REQUESTED_REVISION","APPROVED","REOPENED","REJECTED"]);expect(feedbackTypeSchema.options).toEqual(["COMMENT","QUESTION","CORRECTION","SUGGESTION","REVISION_REQUEST","APPROVAL_NOTE","WARNING"]);});
+
+it("requests revision through caller-bound RPC",async()=>{rpc.mockResolvedValue({data:{...s,status:"REVISION_REQUESTED"},error:null});expect((await requestRevision({submissionId:id(1),note:" Revise "})).status).toBe("REVISION_REQUESTED");expect(rpc).toHaveBeenCalledWith("request_revision",{target_submission:id(1),revision_note:"Revise"});expect(notify).toHaveBeenCalledExactlyOnceWith(s.id);expect(rpc.mock.invocationCallOrder[0]).toBeLessThan(notify.mock.invocationCallOrder[0]);});
+it.each(["userId","reviewerUserId","status","versionId","role"])("rejects revision spoof %s",async key=>{await expect(requestRevision({submissionId:id(1),note:"Revise",[key]:id(99)})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("rejects empty revision note",async()=>{await expect(requestRevision({submissionId:id(1),note:" \t "})).rejects.toMatchObject({code:"VALIDATION_ERROR"});});
+it("fails closed on returned reviewer/state mismatch",async()=>{rpc.mockResolvedValue({data:s,error:null});await expect(requestRevision({submissionId:id(1),note:"Revise"})).rejects.toMatchObject({code:"FORBIDDEN"});});
+it("hides provider revision details",async()=>{rpc.mockResolvedValue({error:{code:"42501",message:"Private Artifact"}});await expect(requestRevision({submissionId:id(1),note:"Revise"})).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});});
+
+it('draft feedback/start review do not dispatch revision notifications',async()=>{await startReview(id(1));await addFeedback(input);expect(notify).not.toHaveBeenCalled();});
+it.each(['42501','22023','23514'])('failed revision %s never notifies',async code=>{rpc.mockResolvedValue({error:{code}});await expect(requestRevision({submissionId:id(1),note:'Revise'})).rejects.toThrow();expect(notify).not.toHaveBeenCalled();});
+it('rejects recipient spoofing before review or delivery',async()=>{await expect(requestRevision({submissionId:id(1),note:'Revise',recipientUserId:id(5)})).rejects.toMatchObject({code:'VALIDATION_ERROR'});expect(notify).not.toHaveBeenCalled();});
+it.each(['id','reviewer_user_id','status'])('does not notify for an untrusted returned revision %s',async key=>{rpc.mockResolvedValue({data:{...s,status:'REVISION_REQUESTED',[key]:key==='status'?'UNDER_REVIEW':id(99)},error:null});await expect(requestRevision({submissionId:id(1),note:'Revise'})).rejects.toMatchObject({code:'FORBIDDEN'});expect(notify).not.toHaveBeenCalled();});
+it('does not notify after caller identity changes',async()=>{rpc.mockResolvedValue({data:{...s,status:'REVISION_REQUESTED'},error:null});context.mockResolvedValueOnce({userId:id(6)}).mockResolvedValue({userId:id(99)});await expect(requestRevision({submissionId:id(1),note:'Revise'})).rejects.toMatchObject({code:'FORBIDDEN'});expect(notify).not.toHaveBeenCalled();});
+
+it('dispatches committed M8 feedback identity only',async()=>{await addFeedback(input);expect(commentNotify).toHaveBeenCalledExactlyOnceWith(f.id);});
+it('failed feedback never notifies',async()=>{rpc.mockResolvedValue({error:{code:'42501'}});await expect(addFeedback(input)).rejects.toThrow();expect(commentNotify).not.toHaveBeenCalled();});

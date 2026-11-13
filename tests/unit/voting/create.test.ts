@@ -1,0 +1,18 @@
+import {it,expect,vi,beforeEach} from "vitest";
+vi.mock("server-only",()=>({}));
+const state=vi.hoisted(()=>({actor:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",rpc:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:async()=>({userId:state.actor})}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {createVotingSession,VotingConfigurationError} from "@/features/voting/create";
+import {createVotingSessionSchema} from "@/features/voting/create-schema";
+const id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const input={activityInstanceId:id,votingType:"DOT_VOTE",voteLimit:0,anonymous:true,revealMode:"HIDDEN_UNTIL_REVEAL",options:[{label:"Same"},{label:"Same",description:""}]};
+const result={session:{id,activity_instance_id:id,voting_type:"DOT_VOTE",status:"DRAFT",vote_limit:0,anonymous:true,reveal_mode:"HIDDEN_UNTIL_REVEAL",created_by:state.actor,opened_at:null,closed_at:null},options:[{id:"00000000-0000-4000-8000-000000000001",voting_session_id:id,development_object_id:null,label:"Same",description:null,sequence:1},{id:"00000000-0000-4000-8000-000000000002",voting_session_id:id,development_object_id:null,label:"Same",description:"",sequence:2}]};
+beforeEach(()=>{state.rpc.mockReset();state.rpc.mockResolvedValue({data:structuredClone(result),error:null});});
+it("returns canonical configured rows without hidden retry or auto-open",async()=>{expect(await createVotingSession(input)).toEqual(result);expect(state.rpc).toHaveBeenCalledTimes(1);expect(state.rpc.mock.calls[0][1]).toEqual({target_instance:id,kind:"DOT_VOTE",dot_limit:0,is_anonymous:true,visibility:"HIDDEN_UNTIL_REVEAL",choices:input.options});});
+it.each([{votingType:"FIST_TO_FIVE"},{votingType:"PLANNING_POKER"},{voteLimit:-1},{voteLimit:1.5},{revealMode:"PUBLIC"},{createdBy:state.actor},{status:"OPEN"},{teamId:id},{options:[]},{options:[{label:" "}]},{options:[{label:"x",sequence:1}]},{options:[{label:"x",developmentObjectId:id},{label:"y",developmentObjectId:id.toUpperCase()}]}])("rejects strict invalid input %j",async patch=>{await expect(createVotingSession({...input,...patch})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it("normalizes accepted UUIDs without changing labels",()=>{expect(createVotingSessionSchema.parse({...input,activityInstanceId:id.toUpperCase()}).activityInstanceId).toBe(id);});
+it("does not expose provider errors or inaccessible resource details",async()=>{state.rpc.mockResolvedValue({error:{code:"42501",message:"Private Team secret"}});await expect(createVotingSession(input)).rejects.toMatchObject({code:"NOT_FOUND",message:"Resource unavailable."});});
+it("fails closed for snapshot configuration",async()=>{state.rpc.mockResolvedValue({error:{code:"0A000"}});await expect(createVotingSession(input)).rejects.toBeInstanceOf(VotingConfigurationError);});
+it.each(["OPEN","CLOSED"])("rejects unexpected %s result",async status=>{state.rpc.mockResolvedValue({data:{...result,session:{...result.session,status}},error:null});await expect(createVotingSession(input)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it("rejects canonical response ownership spoofing",async()=>{state.rpc.mockResolvedValue({data:{...result,session:{...result.session,created_by:id}},error:null});await expect(createVotingSession(input)).rejects.toMatchObject({code:"NOT_FOUND"});});

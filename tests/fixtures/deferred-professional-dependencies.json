@@ -1,0 +1,6 @@
+[
+  {"from_session":4,"to_session":5,"relationship":"Session 4 outputs feed Session 5","reason":"Corresponding activity definitions are absent"},
+  {"from_session":6,"to_session":7,"relationship":"Session 6 outputs feed Session 7","reason":"Corresponding activity definitions are absent"},
+  {"from_session":8,"to_session":9,"relationship":"Session 8 prepares Session 9","reason":"Corresponding activity definitions are absent"},
+  {"from_session":9,"to_session":10,"relationship":"Session 9 Patent Landscape Snapshot feeds Session 10","reason":"Corresponding activity definitions are absent"}
+]

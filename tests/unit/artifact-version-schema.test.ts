@@ -1,0 +1,10 @@
+import {it,expect} from "vitest";
+import {artifactVersionSchema,artifactVersionStatusSchema} from "@/features/artifacts/version-schema";
+const id="00000000-0000-4000-8000-000000006004",other="00000000-0000-4000-8000-000000006005",stamp="2026-10-07T00:00:00Z";
+const row={id,artifact_id:other,version_number:1,version_label:null,draft_revision:0,content_snapshot:{nodes:[],layout:{}},change_summary:null,status:"DRAFT",created_by:other,created_at:stamp,previous_version_id:null,approved_by:null,approved_at:null,approval_note:null};
+it.each(artifactVersionStatusSchema.options)("M8.2 accepts exact status %s",status=>expect(artifactVersionSchema.safeParse({...row,status,...(["APPROVED","CURRENT"].includes(status)?{approved_by:other,approved_at:stamp}:{})}).success).toBe(true));
+it.each(["ACTIVE","VERIFIED","UNVERIFIED","REJECTED","RESUBMITTED","custom"])("M8.2 rejects extra status %s",status=>expect(artifactVersionSchema.safeParse({...row,status}).success).toBe(false));
+it.each([{version_number:0},{version_number:-1},{version_number:1.5},{version_number:2147483648},{artifact_id:null},{created_by:null},{previous_version_id:id},{approved_by:other},{approved_at:stamp},{status:"APPROVED"},{status:"CURRENT"},{content:"not snapshot"}])("M8.2 rejects invalid history shape %j",patch=>expect(artifactVersionSchema.safeParse({...row,...patch}).success).toBe(false));
+it("M8.2 permits nullable label/summary/lineage",()=>expect(artifactVersionSchema.parse(row).version_label).toBeNull());
+it("M8.2 represents V2 lineage",()=>expect(artifactVersionSchema.parse({...row,id:other,artifact_id:id,version_number:2,previous_version_id:id}).previous_version_id).toBe(id));
+it.each([{},[],{referenceId:other,layout:{x:1}},null])("M8.2 accepts JSON snapshot shape %j",content_snapshot=>expect(artifactVersionSchema.safeParse({...row,content_snapshot}).success).toBe(true));

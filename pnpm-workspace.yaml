@@ -1,0 +1,8 @@
+# Native resolver used by Next.js ESLint tooling.
+allowBuilds:
+  unrs-resolver@1.12.2: true
+
+# Supabase declares its own generic toJSON return type; retain it without
+# inheriting the incompatible TypeScript 6 DOM toJSON declaration.
+patchedDependencies:
+  '@supabase/auth-js@2.117.2': patches/supabase-auth-js-2.117.2.patch

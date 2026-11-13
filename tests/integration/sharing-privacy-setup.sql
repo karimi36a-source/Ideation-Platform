@@ -1,0 +1,32 @@
+-- Only disposable fixture records; no product routes, ACLs, auth credentials or UI added.
+reset role;
+create table public.sharing_privacy_fixture(label text primary key,payload jsonb not null);
+insert into public.sharing_privacy_fixture select key,value from public.mind_map_browser_fixture;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006002',true);
+select public.remove_team_member((select (value->>'teamId')::uuid from public.mind_map_browser_fixture where key='scope'),'00000000-0000-4000-8000-000000006008','Role-only Mentor privacy control');
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006005',true);
+do $$declare c jsonb;p uuid;w uuid;a uuid;m uuid;v jsonb;s jsonb;u jsonb;f jsonb;pat jsonb;ev jsonb;log0 jsonb;begin
+ select value into c from public.mind_map_browser_fixture where key='scope';p:=(c->>'projectId')::uuid;w:=(c->>'workspaceId')::uuid;
+ select (value#>>'{activity,id}')::uuid into a from public.mind_map_browser_fixture where key='activity';
+ select (value#>>'{mindMap,id}')::uuid into m from public.mind_map_browser_fixture where key='map';
+ perform public.save_mind_map_draft(jsonb_build_object('mindMapId',m,'expectedDraftRevision',0));
+ v:=public.create_mind_map_version(jsonb_build_object('mindMapId',m,'expectedDraftRevision',1,'changeSummary','Explicit privacy V2'));
+ insert into public.sharing_privacy_fixture values('selected',v);
+ pat:=public.create_patent_record(jsonb_build_object('projectId',p,'workspaceId',w,'publicationNumber','WO PRIVATE M13.23','title','PRIVATE M13.23 patent','sourceDatabase','PATENTSCOPE','sourceUrl','https://example.test/public-source','whyRetained','PRIVATE M13.23 research'));
+ ev:=public.link_patent_to_evidence(jsonb_build_object('patentRecordId',pat->>'id','evidenceType','PATENT','title','PRIVATE M13.23 evidence','description','Private source notes'));
+ log0:=public.create_patent_search_log(jsonb_build_object('projectId',p,'workspaceId',w,'activityInstanceId',a,'databaseName','USPTO','queryText','PRIVATE M13.23 strategy','searchMethod','Keyword','reason','Human research'));
+ perform public.link_evidence(jsonb_build_object('evidenceId',ev->>'id','entityType','ARTIFACT','entityId',v#>>'{mindMap,artifact_id}','relationshipType','RELATED_TO'));
+ u:=public.request_file_upload(w,p,'PRIVATE M13.23 file.txt','text/plain',3);
+ insert into storage.objects(bucket_id,name,metadata) values('fici-private-files',u->>'storage_reference','{"size":3,"mimetype":"text/plain"}');
+ f:=public.register_uploaded_file((u->>'id')::uuid);
+ perform public.link_file(jsonb_build_object('fileId',f->>'id','entityType','ARTIFACT','entityId',v#>>'{mindMap,artifact_id}','relationshipType','ARTIFACT_FILE'));
+ insert into public.sharing_privacy_fixture values('patent',pat),('evidence',ev),('search',log0),('file',f);
+ perform public.relate_development_objects((select (value->>'id')::uuid from public.mind_map_browser_fixture where key='object_component'),(select (value->>'id')::uuid from public.mind_map_browser_fixture where key='object_problem'),'CONNECTED_TO','PRIVATE M13.23 relation');
+ insert into public.sharing_privacy_fixture values('chat',public.send_team_chat_message((c->>'teamId')::uuid,'PRIVATE M13.23 chat'));
+ s:=public.share_entity(jsonb_build_object('entityType','ARTIFACT','entityId',v#>>'{mindMap,artifact_id}','sourceVersionId',v#>>'{version,id}','destinationType','TEAM','destinationId',c->>'teamBId','permissionLevel','VIEW','shareMode','SNAPSHOT'));
+ insert into public.sharing_privacy_fixture values('share',s);
+ v:=public.create_mind_map_version(jsonb_build_object('mindMapId',v#>>'{mindMap,id}','expectedDraftRevision',0,'changeSummary','Unshared privacy V3'));
+ insert into public.sharing_privacy_fixture values('successor',v);
+ assert (select count(*) from public.shares where revoked_at is null)=1,'Exactly one active selected entity Share required';
+end$$;
+commit;

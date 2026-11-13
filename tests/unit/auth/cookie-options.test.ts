@@ -1,0 +1,21 @@
+import {afterEach,beforeEach,expect,it,vi} from 'vitest';
+import {NextRequest} from 'next/server';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({server:vi.fn(),browser:vi.fn(),cookies:{getAll:()=>[],set:vi.fn()}}));
+vi.mock('@supabase/ssr',()=>({createServerClient:m.server,createBrowserClient:m.browser}));
+vi.mock('next/headers',()=>({cookies:async()=>m.cookies}));
+vi.mock('@/lib/validation/env-server',()=>({getServerEnv:()=>({NEXT_PUBLIC_SUPABASE_URL:'https://example.supabase.co',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixture_only'})}));
+vi.mock('@/lib/validation/env-public',()=>({getPublicEnv:()=>({NEXT_PUBLIC_SUPABASE_URL:'https://example.supabase.co',NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY:'sb_publishable_fixture_only'})}));
+import {getAuthCookieOptions} from '@/lib/auth/cookie-options';
+import {createServerSupabaseClient} from '@/lib/db/server';
+import {createBrowserSupabaseClient} from '@/lib/db/browser';
+import {updateSession} from '@/lib/auth/proxy';
+beforeEach(()=>{vi.resetAllMocks();m.server.mockReturnValue({auth:{getUser:async()=>({data:{user:null},error:null})}});});
+afterEach(()=>vi.unstubAllEnvs());
+it.each([['production',true],['development',false],['test',false]] as const)('all cookie writers use the shared %s policy',async(mode,secure)=>{
+ vi.stubEnv('NODE_ENV',mode);
+ await createServerSupabaseClient();await updateSession(new NextRequest(mode==='production'?'https://fici.test/account':'http://localhost:3000/account'));createBrowserSupabaseClient();
+ expect(getAuthCookieOptions()).toEqual({secure});
+ for(const call of [...m.server.mock.calls,...m.browser.mock.calls])expect(call[2].cookieOptions).toEqual({secure});
+ expect(m.server).toHaveBeenCalledTimes(2);expect(m.browser).toHaveBeenCalledOnce();
+});

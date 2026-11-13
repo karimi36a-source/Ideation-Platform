@@ -1,0 +1,8 @@
+import {beforeEach,expect,it,vi} from "vitest";
+const auth=vi.hoisted(()=>vi.fn());const rpc=vi.hoisted(()=>vi.fn());
+vi.mock("server-only",()=>({}));vi.mock("@/lib/auth/authorization",async original=>({...await original<object>(),getAuthorizationContext:auth}));vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {getMindMapEditor} from "@/features/mind-map/editor-service";
+const id="00000000-0000-4000-8000-000000000001";const payload={mindMap:{id,artifact_id:id,artifact_version_id:id,root_node_id:id},nodes:[{id,mind_map_id:id,node_type:"CENTRAL_INVENTION",label:"Root",development_object_id:null,parent_node_id:null,position_data:{x:0,y:0},metadata:{role:"central_invention"},created_by:id,edit_revision:0}],edges:[],objects:[],editable:true};
+beforeEach(()=>{vi.resetAllMocks();auth.mockResolvedValue({userId:id});});
+it("loads one server-authorized normalized payload",async()=>{rpc.mockResolvedValue({data:payload,error:null});await expect(getMindMapEditor(id)).resolves.toEqual(payload);expect(rpc).toHaveBeenCalledWith("get_mind_map_editor",{target_activity:id});});
+it("masks foreign, malformed and identity-drift loads alike",async()=>{for(const response of [{data:null,error:{code:"42501"}},{data:{...payload,nodes:[]},error:null}]){rpc.mockResolvedValueOnce(response);await expect(getMindMapEditor(id)).rejects.toMatchObject({code:"NOT_FOUND",message:"Resource unavailable."});}auth.mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:"00000000-0000-4000-8000-000000000002"});rpc.mockResolvedValue({data:payload,error:null});await expect(getMindMapEditor(id)).rejects.toMatchObject({code:"NOT_FOUND"});});

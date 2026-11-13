@@ -1,0 +1,18 @@
+[
+  {
+    "id": "00000000-0000-4000-8000-000000000801",
+    "session_definition_id": "00000000-0000-4000-8000-000000000702",
+    "name": "SCAMPER Example Set",
+    "description": "Teach the seven SCAMPER lenses and the FICI holistic-to-detail method.",
+    "method_type": "scamper",
+    "workspace_mode": "Personal Workspace",
+    "sequence": 1,
+    "instructions": "Participants prepare 14 SCAMPER examples:\n\n- 7 existing examples\n- 7 participant-created examples\n\nwith an explanation of what changed.",
+    "ai_role_code": null,
+    "requires_review": true,
+    "requires_approval": false,
+    "completion_rule": null,
+    "configuration": {},
+    "status": "active"
+  }
+]

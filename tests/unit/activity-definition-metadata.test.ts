@@ -1,0 +1,13 @@
+import {beforeEach,expect,it,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn()}));
+vi.mock('@/lib/auth/authorization',async original=>({...await original<typeof import('@/lib/auth/authorization')>(),getAuthorizationContext:m.auth}));
+vi.mock('@/lib/db/server',()=>({createServerSupabaseClient:async()=>({rpc:m.rpc})}));
+import {getActivityDefinitionMetadata} from '@/features/activities/definition-metadata';
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+const definition={id:id(2),name:'Mind Map',session_definition_id:id(3),method_type:'mind_map'};
+beforeEach(()=>{vi.clearAllMocks();m.auth.mockResolvedValue({userId:id(1)});m.rpc.mockImplementation(async name=>({data:name==='activity_resume_definition_metadata'?definition:true,error:null}));});
+it('uses caller-bound M7 metadata and rechecks access without table reads',async()=>{expect(await getActivityDefinitionMetadata(id(4))).toEqual(definition);expect(m.rpc).toHaveBeenCalledWith('activity_resume_definition_metadata',{target_instance:id(4)});expect(m.rpc).toHaveBeenCalledWith('can_read_activity_instance',{target_instance:id(4)});});
+it.each([null,{...definition,id:'bad'},{...definition,instructions:'private'}])('missing/malformed/extra metadata fails closed',async data=>{m.rpc.mockResolvedValue({data,error:null});await expect(getActivityDefinitionMetadata(id(4))).rejects.toThrow();});
+it('RPC error and access removal fail closed',async()=>{m.rpc.mockResolvedValue({data:definition,error:{code:'42501'}});await expect(getActivityDefinitionMetadata(id(4))).rejects.toThrow();m.rpc.mockImplementation(async name=>({data:name==='activity_resume_definition_metadata'?definition:false,error:null}));await expect(getActivityDefinitionMetadata(id(4))).rejects.toThrow();});
+it('identity changes fail closed',async()=>{m.auth.mockResolvedValueOnce({userId:id(1)}).mockResolvedValue({userId:id(99)});await expect(getActivityDefinitionMetadata(id(4))).rejects.toThrow();});

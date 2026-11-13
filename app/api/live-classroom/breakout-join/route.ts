@@ -1,0 +1,2 @@
+import {getBreakoutJoin} from '@/features/live-classroom/breakout';
+export async function POST(request:Request){const headers={'Cache-Control':'no-store, private','Pragma':'no-cache','Referrer-Policy':'no-referrer'};if(request.headers.get('origin')!==new URL(request.url).origin)return Response.json({error:'Breakout unavailable.'},{status:403,headers});try{return Response.json(await getBreakoutJoin(await request.json()),{headers});}catch{return Response.json({error:'Breakout unavailable.'},{status:403,headers});}}

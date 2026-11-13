@@ -1,0 +1,15 @@
+import {it,expect,vi,beforeEach} from "vitest";
+vi.mock("server-only",()=>({}));
+const state=vi.hoisted(()=>({actor:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",rpc:vi.fn(),auth:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:state.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {openVotingSession} from "@/features/voting/open";
+const id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const row={id,activity_instance_id:id,voting_type:"DOT_VOTE",status:"OPEN",vote_limit:0,anonymous:true,reveal_mode:"HIDDEN_UNTIL_REVEAL",created_by:id,opened_at:"2026-10-11T12:00:00Z",closed_at:null};
+beforeEach(()=>{state.rpc.mockReset();state.auth.mockReset();state.auth.mockResolvedValue({userId:state.actor});state.rpc.mockResolvedValue({data:row,error:null});});
+it("returns canonical OPEN on retry without hidden extra calls or actor claims",async()=>{expect(await openVotingSession(id.toUpperCase())).toEqual(row);expect(state.rpc).toHaveBeenCalledExactlyOnceWith("open_voting_session",{target_session:id});});
+it.each([null,"invalid",{votingSessionId:id},{id,force:true}])("rejects non-UUID input %j",async value=>{await expect(openVotingSession(value)).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([{status:"DRAFT"},{status:"CLOSED"},{opened_at:null},{closed_at:row.opened_at},{voting_type:"PLANNING_POKER"},{id:state.actor}])("fails closed for unexpected persisted state %j",async patch=>{state.rpc.mockResolvedValue({data:{...row,...patch},error:null});await expect(openVotingSession(id)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it.each(["42501","XX000"])("does not leak provider/resource detail %s",async code=>{state.rpc.mockResolvedValue({error:{code,message:"Private Team"}});await expect(openVotingSession(id)).rejects.toMatchObject({code:"NOT_FOUND",message:"Resource unavailable."});});
+it.each([["55000","INVALID_STATE"],["0A000","DEPENDENCY_NOT_MET"],["22023","VALIDATION_ERROR"],["28000","AUTH_REQUIRED"]])("maps stable failure %s",async(code,expected)=>{state.rpc.mockResolvedValue({error:{code}});await expect(openVotingSession(id)).rejects.toMatchObject({code:expected});});
+it("rejects identity change before RPC",async()=>{state.auth.mockResolvedValueOnce({userId:state.actor}).mockResolvedValue({userId:id});await expect(openVotingSession(id)).rejects.toMatchObject({code:"NOT_FOUND"});expect(state.rpc).not.toHaveBeenCalled();});

@@ -1,0 +1,13 @@
+import {z} from "zod";
+const uuid=z.uuid().transform(v=>v.toLowerCase());
+const revision=z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+export const mindMapEdgeTypes=["HIERARCHY","CROSS_CONNECTION"] as const;
+const reserved=new Set(["mindmapid","mapid","sourcenodeid","targetnodeid","source","target","projectid","workspaceid","teamid","artifactid","artifactversionid","versionid","developmentobjectrelationshipid","relationshipid","relationshiptype","canonicalrelationshipid","canonicalrelationshiptype","approval","approved","approvalstate","baseline","baselinestate","baselineid","authorization","scope","createdby","actor","userid","status","editrevision"]);
+const metadata=z.record(z.string(),z.json()).refine(v=>Object.keys(v).every(k=>!reserved.has(k.replaceAll("_","").toLowerCase())));
+const fields={edgeType:z.enum(mindMapEdgeTypes),label:z.string().trim().min(1).max(200).nullable(),metadata};
+export const connectMindMapNodesSchema=z.strictObject({mindMapId:uuid,sourceNodeId:uuid,targetNodeId:uuid,edgeType:fields.edgeType,label:fields.label.optional(),metadata:metadata.optional()}).refine(v=>v.sourceNodeId!==v.targetNodeId);
+export const updateMindMapEdgeSchema=z.strictObject({edgeId:uuid,expectedRevision:revision,edgeType:fields.edgeType.optional(),label:fields.label.optional(),metadata:metadata.optional()}).refine(v=>[v.edgeType,v.label,v.metadata].some(x=>x!==undefined));
+export const removeMindMapEdgeSchema=z.strictObject({edgeId:uuid,expectedRevision:revision});
+export type ConnectMindMapNodesInput=z.infer<typeof connectMindMapNodesSchema>;
+export type UpdateMindMapEdgeInput=z.infer<typeof updateMindMapEdgeSchema>;
+export type RemoveMindMapEdgeInput=z.infer<typeof removeMindMapEdgeSchema>;

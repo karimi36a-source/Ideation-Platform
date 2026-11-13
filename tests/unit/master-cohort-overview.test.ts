@@ -1,0 +1,17 @@
+import {beforeEach,expect,it,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({actor:vi.fn(),rpc:vi.fn()}));
+vi.mock('@/lib/auth/authorization',async original=>({...await original<typeof import('@/lib/auth/authorization')>(),getAuthorizationContext:m.actor}));
+vi.mock('@/lib/db/server',()=>({createServerSupabaseClient:async()=>({rpc:m.rpc})}));
+import {getMasterCohortOverview} from '@/features/progress/master-cohort-overview';
+import {masterCohortOverviewSchema} from '@/features/progress/master-cohort-overview-schema';
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+const empty=()=>({cohort:{id:id(1),name:'Assigned cohort',status:'active'},teams:[]});
+beforeEach(()=>{m.actor.mockResolvedValue({userId:id(2),assignments:[]});m.rpc.mockResolvedValue({data:empty(),error:null});});
+it('uses server identity and only exact requested Cohort RPC',async()=>{expect(await getMasterCohortOverview(id(1))).toEqual(empty());expect(m.rpc).toHaveBeenCalledExactlyOnceWith('get_master_cohort_overview',{target_cohort:id(1)});});
+it.each([null,{},'',{cohortId:id(1),masterUserId:id(2)},id(1)+'?role=MASTER'])('rejects malformed or scope-spoof input %j',async input=>{await expect(getMasterCohortOverview(input)).rejects.toMatchObject({code:'VALIDATION_ERROR'});expect(m.rpc).not.toHaveBeenCalled();});
+it('propagates authentication failure without querying',async()=>{m.actor.mockRejectedValue(new Error('Authentication required'));await expect(getMasterCohortOverview(id(1))).rejects.toThrow();expect(m.rpc).not.toHaveBeenCalled();});
+it.each(['42501','28000','XX000'])('fails closed on DB denial/provider error %s',async code=>{m.rpc.mockResolvedValue({error:{code},data:empty()});await expect(getMasterCohortOverview(id(1))).rejects.toMatchObject({code:'FORBIDDEN'});});
+it('rejects a mismatched Cohort and unknown response fields',async()=>{m.rpc.mockResolvedValue({data:{...empty(),privateChat:'secret'},error:null});await expect(getMasterCohortOverview(id(1))).rejects.toMatchObject({code:'FORBIDDEN'});m.rpc.mockResolvedValue({data:{cohort:{...empty().cohort,id:id(3)},teams:[]},error:null});await expect(getMasterCohortOverview(id(1))).rejects.toMatchObject({code:'FORBIDDEN'});});
+it('rejects identity changes during the request',async()=>{m.actor.mockResolvedValueOnce({userId:id(2)}).mockResolvedValueOnce({userId:id(3)});await expect(getMasterCohortOverview(id(1))).rejects.toMatchObject({code:'FORBIDDEN'});});
+it('strict response rejects Draft as approved and inconsistent review counts',()=>{const project={project:{id:id(4),name:'Team project',status:'active'},activities:[],pendingReview:{count:0,targets:[]},revisionRequested:{pending:false,targets:[]},approvedOutputs:[],lastMeaningfulWorkflowUpdateAt:null};const result={...empty(),teams:[{team:{id:id(5),name:'Team',status:'active'},activeMemberCount:2,projects:[project]}]};expect(masterCohortOverviewSchema.safeParse(result).success).toBe(true);expect(masterCohortOverviewSchema.safeParse({...result,teams:[{...result.teams[0],projects:[{...project,pendingReview:{count:2,targets:[]}}]}]}).success).toBe(false);expect(masterCohortOverviewSchema.safeParse({...result,teams:[{...result.teams[0],projects:[{...project,approvedOutputs:[{artifactId:id(6),artifactType:'MIND_MAP',versionId:id(7),versionNumber:2,status:'DRAFT'}]}]}]}).success).toBe(false);});

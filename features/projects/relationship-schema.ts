@@ -1,0 +1,5 @@
+import {z} from "zod";
+export const developmentRelationshipTypeSchema=z.enum(["SOLVES", "IMPLEMENTS", "SUPPORTS", "DEPENDS_ON", "BELONGS_TO", "CONNECTED_TO", "DERIVED_FROM", "VALIDATES", "CONTRADICTS", "TESTED_BY", "EVIDENCE_FOR", "EVIDENCE_AGAINST", "REPLACES", "SUPERSEDES", "IDENTIFIED_IN"]);
+export const developmentRelationshipSchema=z.strictObject({id:z.uuid(),project_id:z.uuid(),source_object_id:z.uuid(),target_object_id:z.uuid(),relationship_type:developmentRelationshipTypeSchema,description:z.string().nullable(),created_by:z.uuid(),status:z.enum(["active","inactive"]),created_at:z.iso.datetime({offset:true}),updated_at:z.iso.datetime({offset:true})}).refine(v=>v.source_object_id!==v.target_object_id);
+export const relateDevelopmentObjectsSchema=z.strictObject({sourceObjectId:z.uuid(),targetObjectId:z.uuid(),relationshipType:developmentRelationshipTypeSchema,description:z.string().optional()}).refine(v=>v.sourceObjectId!==v.targetObjectId);
+export type DevelopmentRelationship=z.infer<typeof developmentRelationshipSchema>;

@@ -1,0 +1,6 @@
+{
+  "AT-PW-001": "Owner Workspace-level access: route handler, service, resolver and PostgreSQL",
+  "AT-PW-002": "BLOCKER: Student A2 privacy across route handler, service, exact/guessed IDs and PostgreSQL",
+  "AT-PW-003": "BLOCKER: Master cannot browse unshared Personal Workspace",
+  "AT-PW-004": "DEFERRED — requires Artifacts + Sharing"
+}

@@ -1,0 +1,11 @@
+import {z} from "zod";
+export const programTypeSchema=z.enum(["workshop","professional_course","advanced_course"]);
+export const programStatusSchema=z.enum(["active","inactive","archived"]);
+export const curriculumStatusSchema=z.enum(["draft","approved","retired"]);
+const timestamps={created_at:z.iso.datetime({offset:true}),updated_at:z.iso.datetime({offset:true})};
+export const programInputSchema=z.strictObject({name:z.string().trim().min(1).max(200),code:z.string().regex(/^[A-Z0-9]+(_[A-Z0-9]+)*$/),description:z.string(),program_type:programTypeSchema,status:programStatusSchema});
+export const programSchema=programInputSchema.extend({id:z.uuid(),organization_id:z.uuid(),current_curriculum_version_id:z.uuid().nullable(),current_curriculum_required_status:z.literal("approved"),...timestamps});
+export const curriculumInputSchema=z.strictObject({version_label:z.string().trim().min(1).max(100),effective_from:z.iso.datetime({offset:true}).nullable(),effective_to:z.iso.datetime({offset:true}).nullable(),notes:z.string()}).refine(v=>v.effective_from===null||v.effective_to===null||Date.parse(v.effective_to)>Date.parse(v.effective_from),{message:"Invalid effective window"});
+export const curriculumSchema=z.object({id:z.uuid(),program_id:z.uuid(),version_label:z.string().min(1).max(100),status:curriculumStatusSchema,effective_from:z.iso.datetime({offset:true}).nullable(),effective_to:z.iso.datetime({offset:true}).nullable(),notes:z.string(),...timestamps});
+export type Program=z.infer<typeof programSchema>;
+export type CurriculumVersion=z.infer<typeof curriculumSchema>;

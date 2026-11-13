@@ -1,0 +1,34 @@
+import {it,expect,vi,beforeEach} from "vitest";
+vi.mock("server-only",()=>({}));
+const state=vi.hoisted(()=>({rpc:vi.fn(),auth:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:state.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {verifyEvidence} from "@/features/evidence/verify";
+import {verifyEvidenceSchema,evidenceVerificationHistorySchema} from "@/features/evidence/verify-schema";
+const id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",actor="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",time="2026-10-21T00:00:00Z";
+const input={evidenceId:id,verificationStatus:"VERIFIED",note:" Reviewed source "};
+const row={id,project_id:id,workspace_id:id,evidence_type:"MEASUREMENT",title:"Measurement",description:"Recorded observations",source_name:"Lab notebook",source_url:null,file_id:null,claim_locator:null,verification_status:"VERIFIED",verified_by:actor,verified_at:time,created_by:id,captured_at:time,metadata:{},created_at:time,updated_at:time,updated_by:actor,archived_at:null};
+beforeEach(()=>{state.rpc.mockReset();state.auth.mockReset();state.auth.mockResolvedValue({userId:actor});state.rpc.mockResolvedValue({data:row,error:null});});
+it("uses only the three approved arguments and returns canonical Evidence",async()=>{expect(await verifyEvidence(input)).toEqual(row);expect(state.rpc).toHaveBeenCalledExactlyOnceWith("verify_evidence",{target_evidence:id,target_status:"VERIFIED",verification_note:"Reviewed source"});});
+it.each(["UNVERIFIED","PARTIALLY_VERIFIED","VERIFIED","CONTRADICTED","NEEDS_REVIEW"])("accepts explicit %s",verificationStatus=>{expect(verifyEvidenceSchema.safeParse({evidenceId:id,verificationStatus}).success).toBe(true);});
+it.each(["APPROVED","REJECTED","scientifically_certain",""])("rejects extra state %s",verificationStatus=>{expect(verifyEvidenceSchema.safeParse({...input,verificationStatus}).success).toBe(false);});
+it.each(["verifiedBy","verifiedAt","actorId","projectId","workspaceId","teamId","createdBy","metadata","role","expectedRevision"])("rejects additional %s",async key=>{await expect(verifyEvidence({...input,[key]:id})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([""," \t\n\u00a0 "])("rejects supplied blank note %j",note=>{expect(verifyEvidenceSchema.safeParse({...input,note}).success).toBe(false);});
+it("does not accept a supplied null note",()=>{expect(verifyEvidenceSchema.safeParse({...input,note:null}).success).toBe(false);});
+it.each([["42501","NOT_FOUND"],["23503","NOT_FOUND"],["55000","NOT_FOUND"],["22023","VALIDATION_ERROR"],["22P02","VALIDATION_ERROR"],["28000","AUTH_REQUIRED"],["40001","CONFLICT"]])("maps %s without history/private metadata",async(code,expected)=>{state.rpc.mockResolvedValue({error:{code,message:"Private history and owner"}});await expect(verifyEvidence(input)).rejects.toMatchObject({code:expected});});
+it("anonymous never reaches RPC",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");state.auth.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(verifyEvidence(input)).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(state.rpc).not.toHaveBeenCalled();});
+it("changed identity denies RPC",async()=>{state.auth.mockResolvedValueOnce({userId:actor}).mockResolvedValue({userId:id});await expect(verifyEvidence(input)).rejects.toMatchObject({code:"NOT_FOUND"});expect(state.rpc).not.toHaveBeenCalled();});
+it("changed identity after RPC withholds the result",async()=>{state.auth.mockResolvedValueOnce({userId:actor}).mockResolvedValueOnce({userId:actor}).mockResolvedValue({userId:id});await expect(verifyEvidence(input)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it.each([{id:actor},{verification_status:"CONTRADICTED"},{archived_at:time},{extra:"private"}])("rejects noncanonical response %j",async patch=>{state.rpc.mockResolvedValue({data:{...row,...patch},error:null});await expect(verifyEvidence(input)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it("authorized same-status retry may preserve a previous verifier",async()=>{state.rpc.mockResolvedValue({data:{...row,verified_by:id},error:null});expect(await verifyEvidence(input)).toMatchObject({verified_by:id});});
+it("UNVERIFIED current state clears attribution but immutable history retains actor and time",async()=>{
+ state.rpc.mockResolvedValue({data:{...row,verification_status:"UNVERIFIED",verified_by:null,verified_at:null},error:null});
+ expect(await verifyEvidence({evidenceId:id,verificationStatus:"UNVERIFIED"})).toMatchObject({verified_by:null,verified_at:null});
+ expect(evidenceVerificationHistorySchema.safeParse({id,evidence_id:id,previous_status:"VERIFIED",new_status:"UNVERIFIED",verified_by:actor,verified_at:time,note:"Confidence reset"}).success).toBe(true);
+});
+it("history requires a real transition and retained actor/time",()=>{
+ const event={id,evidence_id:id,previous_status:"VERIFIED",new_status:"UNVERIFIED",verified_by:actor,verified_at:time,note:null};
+ expect(evidenceVerificationHistorySchema.safeParse({...event,previous_status:"UNVERIFIED"}).success).toBe(false);
+ expect(evidenceVerificationHistorySchema.safeParse({...event,verified_by:null}).success).toBe(false);
+ expect(evidenceVerificationHistorySchema.safeParse({...event,verified_at:null}).success).toBe(false);
+});

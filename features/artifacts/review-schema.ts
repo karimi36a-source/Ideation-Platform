@@ -1,0 +1,10 @@
+import {z} from "zod";
+export const requestRevisionSchema=z.strictObject({submissionId:z.uuid(),note:z.string().trim().min(1)});
+export const reviewActionTypeSchema=z.enum(["STARTED_REVIEW","COMMENTED","REQUESTED_REVISION","APPROVED","REOPENED","REJECTED"]);
+export const feedbackTypeSchema=z.enum(["COMMENT","QUESTION","CORRECTION","SUGGESTION","REVISION_REQUEST","APPROVAL_NOTE","WARNING"]);
+export const feedbackTargetSchema=z.enum(["ARTIFACT","DEVELOPMENT_OBJECT"]);
+export const addFeedbackSchema=z.strictObject({targetEntityType:feedbackTargetSchema,targetEntityId:z.uuid(),targetVersionId:z.uuid().nullable().optional(),feedbackType:z.enum(["COMMENT","QUESTION","CORRECTION","SUGGESTION","WARNING"]),content:z.string().trim().min(1)});
+export const reviewActionSchema=z.strictObject({id:z.uuid(),submission_id:z.uuid(),reviewer_user_id:z.uuid(),action_type:reviewActionTypeSchema,note:z.string().nullable(),created_at:z.iso.datetime({offset:true})});
+export const feedbackSchema=z.strictObject({id:z.uuid(),submission_id:z.uuid(),project_id:z.uuid(),target_entity_type:feedbackTargetSchema,target_entity_id:z.uuid(),target_version_id:z.uuid().nullable(),author_user_id:z.uuid(),feedback_type:feedbackTypeSchema,content:z.string().refine(s=>s.trim()===s&&s.length>0),status:z.enum(["OPEN","RESOLVED"]),created_at:z.iso.datetime({offset:true}),resolved_at:z.iso.datetime({offset:true}).nullable()}).refine(v=>v.status==="OPEN"?v.resolved_at===null:v.resolved_at!==null);
+export type ReviewAction=z.infer<typeof reviewActionSchema>;
+export type FeedbackItem=z.infer<typeof feedbackSchema>;

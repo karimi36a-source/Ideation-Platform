@@ -1,0 +1,20 @@
+import {beforeEach,describe,expect,it,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn()}));
+vi.mock('@/lib/auth/authorization',async original=>({...await original<typeof import('@/lib/auth/authorization')>(),getAuthorizationContext:m.auth}));
+vi.mock('@/lib/db/server',()=>({createServerSupabaseClient:async()=>({rpc:m.rpc})}));
+import {AuthorizationError} from '@/lib/auth/authorization';
+import {revokeShare} from '@/features/shares/revoke';
+const actor='00000000-0000-4000-8000-000000006004',id='00000000-0000-4000-8000-000000000001',other='00000000-0000-4000-8000-000000006005';
+const row={id,source_workspace_id:id,shared_entity_type:'ARTIFACT',shared_entity_id:id,shared_by:other,destination_type:'TEAM',destination_id:id,permission_level:'COMMENT',share_mode:'SNAPSHOT',created_at:'2026-11-01T00:00:00Z',revoked_at:'2026-11-01T01:00:00Z',revoked_by:actor};
+describe('M13.12 caller-bound revoke wrapper',()=>{
+ beforeEach(()=>{vi.resetAllMocks();m.auth.mockResolvedValue({userId:actor});m.rpc.mockResolvedValue({data:row,error:null});});
+ it('delegates only the exact Share ID to the atomic authority RPC',async()=>{expect(await revokeShare(id)).toEqual(row);expect(m.rpc).toHaveBeenCalledExactlyOnceWith('revoke_share',{input:{shareId:id}});});
+ it('authorized retries preserve a previous revoker',async()=>{m.rpc.mockResolvedValue({data:{...row,revoked_by:other},error:null});expect((await revokeShare(id)).revoked_by).toBe(other);});
+ it.each([null,{},[],{shareId:id},'bad',{shareId:id,revokedBy:actor}])('rejects malformed/spoofed input %#',async input=>{await expect(revokeShare(input)).rejects.toMatchObject({code:'VALIDATION_ERROR'});expect(m.rpc).not.toHaveBeenCalled();});
+ it('requires authentication',async()=>{m.auth.mockRejectedValue(new AuthorizationError('AUTH_REQUIRED'));await expect(revokeShare(id)).rejects.toMatchObject({code:'AUTH_REQUIRED'});expect(m.rpc).not.toHaveBeenCalled();});
+ it('refreshes identity before mutation',async()=>{m.auth.mockResolvedValueOnce({userId:actor}).mockResolvedValue({userId:other});await expect(revokeShare(id)).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.rpc).not.toHaveBeenCalled();});
+ it('withholds results after identity switch',async()=>{m.auth.mockResolvedValueOnce({userId:actor}).mockResolvedValueOnce({userId:actor}).mockResolvedValue({userId:other});await expect(revokeShare(id)).rejects.toMatchObject({code:'NOT_FOUND'});});
+ it.each([{...row,id:other},{...row,revoked_at:null,revoked_by:null},{...row,privateBody:'secret'}])('rejects noncanonical responses %#',async data=>{m.rpc.mockResolvedValue({data,error:null});await expect(revokeShare(id)).rejects.toMatchObject({code:'NOT_FOUND'});});
+ it.each(['42501','23514','XX000'])('sanitizes authority/history/provider failure %s',async code=>{m.rpc.mockResolvedValue({data:null,error:{code,message:'private source'}});await expect(revokeShare(id)).rejects.toMatchObject({code:'NOT_FOUND',message:'Resource unavailable.'});});
+});

@@ -1,0 +1,31 @@
+import {beforeEach,describe,expect,it,vi} from "vitest";
+import {addMindMapNodeSchema,updateMindMapNodeSchema,structuralNodeTypes} from "@/features/mind-map/node-schema";
+const id="00000000-0000-4000-8000-000000000001",other="00000000-0000-4000-8000-000000000002";
+const auth=vi.hoisted(()=>vi.fn());
+const rpc=vi.hoisted(()=>vi.fn());
+vi.mock("server-only",()=>({}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<object>(),getAuthorizationContext:auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {addMindMapNode,updateMindMapNode} from "@/features/mind-map/nodes";
+const add={mindMapId:other,nodeType:"COMPONENT",label:"Visual",positionData:{x:0,y:0}};
+const update={nodeId:id,expectedRevision:3,label:"Changed"};
+const row={id,mind_map_id:other,node_type:"COMPONENT",label:"Visual",development_object_id:null,parent_node_id:null,position_data:{x:0,y:0},metadata:{},created_by:id,edit_revision:0};
+describe("M11.9 controlled node contracts",()=>{
+ beforeEach(()=>{vi.resetAllMocks();auth.mockResolvedValue({userId:id});});
+ it.each(structuralNodeTypes)("accepts %s and exact visual layout object",nodeType=>{expect(addMindMapNodeSchema.parse({...add,nodeType,label:"  Visual  "}).label).toBe("Visual");});
+ it.each(["CENTRAL_INVENTION","IDEA","OTHER",""])("rejects add type %s",nodeType=>expect(addMindMapNodeSchema.safeParse({...add,nodeType}).success).toBe(false));
+ it.each(["actor","createdBy","projectId","workspaceId","teamId","artifactId","artifactVersionId","rootNodeId","status","editRevision"])("rejects forged add field %s",async key=>{await expect(addMindMapNode({...add,[key]:id})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+ it.each(["createdBy","nodeType","mindMapId","artifactId","edit_revision"])("rejects immutable update %s",key=>expect(updateMindMapNodeSchema.safeParse({...update,[key]:id}).success).toBe(false));
+ it.each([{expectedRevision:undefined},{expectedRevision:-1},{expectedRevision:0.5},{expectedRevision:Number.MAX_SAFE_INTEGER+1},{label:" "},{positionData:[]},{metadata:null},{metadata:{workspace_id:id}},{metadata:{createdBy:id}}])("rejects invalid update %#",patch=>expect(updateMindMapNodeSchema.safeParse({...update,...patch}).success).toBe(false));
+ it("rejects empty update and preserves omitted versus explicit null links",()=>{
+  expect(updateMindMapNodeSchema.safeParse({nodeId:id,expectedRevision:0}).success).toBe(false);
+  expect(updateMindMapNodeSchema.parse(update)).not.toHaveProperty("developmentObjectId");
+  expect(updateMindMapNodeSchema.parse({...update,developmentObjectId:null,parentNodeId:null})).toMatchObject({developmentObjectId:null,parentNodeId:null});
+ });
+ it("returns the persisted node including revision",async()=>{rpc.mockResolvedValue({data:row,error:null});await expect(addMindMapNode(add)).resolves.toEqual(row);expect(rpc).toHaveBeenCalledWith("add_mind_map_node",{input:add});});
+ it("passes CAS and explicit unlink without collapsing null",async()=>{const next={...row,edit_revision:4};rpc.mockResolvedValue({data:next,error:null});await expect(updateMindMapNode({...update,developmentObjectId:null})).resolves.toEqual(next);expect(rpc).toHaveBeenCalledWith("update_mind_map_node",{input:{...update,developmentObjectId:null}});});
+ it("requires verified identity before validation",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");auth.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(addMindMapNode({})).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(rpc).not.toHaveBeenCalled();});
+ it("denies identity drift before and after RPC",async()=>{auth.mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:other});await expect(addMindMapNode(add)).rejects.toMatchObject({code:"NOT_FOUND"});expect(rpc).not.toHaveBeenCalled();auth.mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:other});rpc.mockResolvedValue({data:row,error:null});await expect(addMindMapNode(add)).rejects.toMatchObject({code:"NOT_FOUND"});});
+ it("maps conflict/state and masks private transport details",async()=>{for(const [code,expected] of [["40001","CONFLICT"],["55000","DEPENDENCY_NOT_READY"],["22023","VALIDATION_ERROR"],["42501","NOT_FOUND"]]){rpc.mockResolvedValueOnce({error:{code,message:"Private map metadata"}});await expect(updateMindMapNode(update)).rejects.toMatchObject({code:expected});}rpc.mockRejectedValue(Error("Private backend"));await expect(updateMindMapNode(update)).rejects.toMatchObject({code:"NOT_FOUND",message:"Resource unavailable."});});
+ it.each([{...row,id:other},{...row,edit_revision:-1},{...row,created_by:"forged"}])("rejects invalid persisted update result %#",async data=>{rpc.mockResolvedValue({data,error:null});await expect(updateMindMapNode(update)).rejects.toMatchObject({code:"NOT_FOUND"});});
+});

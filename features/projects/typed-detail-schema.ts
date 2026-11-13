@@ -1,0 +1,11 @@
+import {z} from "zod";
+const descriptive=z.string().refine(v=>v.trim().length>0).nullable();
+export const ideaAcceptanceStateSchema=z.enum(["private","shared","candidate","accepted","rejected","archived"]);
+export const problemDetailsSchema=z.strictObject({development_object_id:z.uuid(),problem_category:descriptive,priority:descriptive,perspective:descriptive});
+export const ideaDetailsSchema=z.strictObject({development_object_id:z.uuid(),technique:descriptive,acceptance_state:ideaAcceptanceStateSchema,original_private_workspace_id:z.uuid().nullable()});
+export const createProblemDetailsSchema=z.strictObject({objectId:z.uuid(),problemCategory:descriptive.optional(),priority:descriptive.optional(),perspective:descriptive.optional()});
+export const updateProblemDetailsSchema=createProblemDetailsSchema.refine(v=>v.problemCategory!==undefined||v.priority!==undefined||v.perspective!==undefined);
+export const createIdeaDetailsSchema=z.strictObject({objectId:z.uuid(),technique:descriptive.optional(),acceptanceState:ideaAcceptanceStateSchema,originalPrivateWorkspaceId:z.uuid().nullable().optional()});
+export const updateIdeaDetailsSchema=createIdeaDetailsSchema.partial({acceptanceState:true}).refine(v=>v.technique!==undefined||v.acceptanceState!==undefined||v.originalPrivateWorkspaceId!==undefined);
+export type ProblemDetails=z.infer<typeof problemDetailsSchema>;
+export type IdeaDetails=z.infer<typeof ideaDetailsSchema>;

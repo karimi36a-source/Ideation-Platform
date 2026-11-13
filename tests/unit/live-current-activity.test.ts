@@ -1,0 +1,24 @@
+import {beforeEach,expect,it,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({auth:vi.fn(),work:vi.fn(),resume:vi.fn(),from:vi.fn(),metadata:vi.fn()}));
+vi.mock('@/lib/auth/authorization',async()=>{const a=await vi.importActual<typeof import('@/lib/auth/authorization')>('@/lib/auth/authorization');return {...a,getAuthorizationContext:m.auth};});
+vi.mock('@/lib/db/server',()=>({createServerSupabaseClient:async()=>({from:m.from})}));
+vi.mock('@/features/progress/current-work',()=>({getMyCurrentWork:m.work}));
+vi.mock('@/features/activities/resume',()=>({resumeActivity:m.resume}));
+vi.mock('@/features/activities/definition-metadata',()=>({getActivityDefinitionMetadata:m.metadata}));
+import {listLiveCurrentActivityIds} from '@/features/live-classroom/current-activity';
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,'0')}`;
+const scope={cohortId:id(2),sessionDefinitionId:id(3)};
+let tables:Record<string,Record<string,unknown>[]>;
+function query(table:string){const filters:((r:Record<string,unknown>)=>boolean)[]=[];const rows=()=>tables[table].filter(r=>filters.every(f=>f(r)));const q={select:()=>q,eq:(k:string,v:unknown)=>{filters.push(r=>r[k]===v);return q;},in:(k:string,v:unknown[])=>{filters.push(r=>v.includes(r[k]));return q;},order:()=>q,range:async(start:number,end:number)=>({data:rows().slice(start,end+1),error:null}),maybeSingle:async()=>({data:rows()[0]??null,error:null})};return q;}
+function work(n=9,status='active',cohort=id(2),session=id(3)){return {cohort:{id:cohort},activities:[{instanceId:id(n),status,session:{id:session}}]};}
+beforeEach(()=>{vi.clearAllMocks();m.metadata.mockResolvedValue({id:id(10),session_definition_id:id(3),name:'Activity',method_type:'mind_map'});m.auth.mockResolvedValue({userId:id(1),assignments:[]});m.work.mockResolvedValue({contexts:[work()]});m.resume.mockImplementation(async target=>({activity:{id:target,cohort_id:id(2),status:'active',activity_definition_id:id(10)}}));tables={activity_definitions:[{id:id(10),session_definition_id:id(3),sequence:1,status:'active'}],activity_instances:[{id:id(9),activity_definition_id:id(10),cohort_id:id(2),status:'active'}]};m.from.mockImplementation(query);});
+it('Student current Activity comes from canonical M15 work and M7 resume',async()=>{expect(await listLiveCurrentActivityIds(scope)).toEqual([id(9)]);expect(m.work).toHaveBeenCalledWith();expect(m.resume).toHaveBeenCalledWith(id(9));expect(m.from).not.toHaveBeenCalled();expect(m.metadata).toHaveBeenCalledWith(id(9));});
+it('assigned Master resolves only RLS-visible current instances of exact Session/Cohort',async()=>{m.auth.mockResolvedValue({userId:id(1),assignments:[{roleCode:'MASTER',cohort_id:id(2)}]});m.work.mockResolvedValue({contexts:[]});tables.activity_instances.push({id:id(99),activity_definition_id:id(10),cohort_id:id(999),status:'active'});expect(await listLiveCurrentActivityIds(scope)).toEqual([id(9)]);});
+it('unrelated Master gets no discovery privilege',async()=>{m.auth.mockResolvedValue({userId:id(1),assignments:[{roleCode:'MASTER',cohort_id:id(999)}]});m.work.mockResolvedValue({contexts:[]});expect(await listLiveCurrentActivityIds(scope)).toEqual([]);expect(m.resume).not.toHaveBeenCalled();});
+it('multiple contexts/candidates retained without arbitrary choice or duplication',async()=>{m.work.mockResolvedValue({contexts:[work(),work(11),work()]});expect(await listLiveCurrentActivityIds(scope)).toEqual([id(9),id(11)]);expect(m.resume).toHaveBeenCalledTimes(2);});
+it('foreign Cohort/Session and completed/archived/unstarted work excluded',async()=>{m.work.mockResolvedValue({contexts:[work(1,'active',id(999)),work(2,'active',id(2),id(999)),work(3,'archived'),work(4,'completed'),work(5,'not_started')]});expect(await listLiveCurrentActivityIds(scope)).toEqual([]);expect(m.resume).not.toHaveBeenCalled();});
+it('known Team B ID cannot bypass canonical resume; no hidden metadata returned',async()=>{m.resume.mockRejectedValue(Error('Private Team B'));expect(await listLiveCurrentActivityIds(scope)).toEqual([]);});
+it('removal/current-state changes during resume suppress stale current candidate',async()=>{m.resume.mockResolvedValue({activity:{cohort_id:id(2),status:'completed',activity_definition_id:id(10)}});expect(await listLiveCurrentActivityIds(scope)).toEqual([]);});
+it('identity switch fails closed',async()=>{m.auth.mockResolvedValueOnce({userId:id(1),assignments:[]}).mockResolvedValue({userId:id(99),assignments:[]});await expect(listLiveCurrentActivityIds(scope)).rejects.toMatchObject({code:'FORBIDDEN'});});
+it('read-only repeated resolution retains same canonical IDs without Daily or state writes',async()=>{const before=JSON.stringify(tables);expect(await listLiveCurrentActivityIds(scope)).toEqual(await listLiveCurrentActivityIds(scope));expect(JSON.stringify(tables)).toBe(before);});

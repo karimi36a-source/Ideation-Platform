@@ -1,0 +1,9 @@
+.classroom { max-width: 76rem; margin: 0 auto; padding: 1.5rem; font-family: system-ui, sans-serif; color: #172e38; }
+.classroom header { border-bottom: 2px solid #19736b; margin-bottom: 1.5rem; }
+.classroom section { padding: 1.2rem; margin: 1rem 0; border: 1px solid #a2b8bc; border-radius: .6rem; background: #f5f9f8; }
+.controls { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1rem 0; }
+.controls button, .classroom a { padding: .65rem 1rem; font: inherit; }
+.controls button { border: 1px solid #175e58; border-radius: .3rem; background: white; cursor: pointer; }
+.controls button:disabled { cursor: default; opacity: .65; }
+.controls button:focus-visible, .classroom a:focus-visible { outline: 3px solid #935500; outline-offset: 3px; }
+.frame { width: 100%; height: min(70vh, 48rem); min-height: 24rem; border: 0; }

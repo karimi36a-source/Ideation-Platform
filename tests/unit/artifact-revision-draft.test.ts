@@ -1,0 +1,18 @@
+import {beforeEach,expect,it,vi} from "vitest";
+vi.mock("server-only",()=>({}));
+const {context,rpc}=vi.hoisted(()=>({context:vi.fn(),rpc:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:context}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {createRevisionDraft} from "@/features/artifacts/revision";
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
+const row={id:id(2),artifact_id:id(3),version_number:2,version_label:null,draft_revision:0,content_snapshot:{revised:true},change_summary:"Change",status:"DRAFT",created_by:id(4),created_at:"2026-10-07T00:00:00Z",previous_version_id:id(1),approved_by:null,approved_at:null,approval_note:null};
+const input={submissionId:id(5),contentSnapshot:{revised:true},changeSummary:"Change"};
+beforeEach(()=>{context.mockReset().mockResolvedValue({userId:id(4)});rpc.mockReset().mockResolvedValue({data:row,error:null});});
+it("uses a server-derived source through the narrow RPC",async()=>{expect(await createRevisionDraft(input)).toEqual(row);expect(rpc).toHaveBeenCalledWith("create_revision_draft",{target_submission:id(5),snapshot:{revised:true},summary:"Change"});});
+it.each(["artifactId","sourceVersionId","previousVersionId","versionNumber","actor","status","sourceDecisionIds"])("rejects caller override %s",async key=>{await expect(createRevisionDraft({...input,[key]:id(9)})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("requires explicit snapshot",async()=>{await expect(createRevisionDraft({submissionId:id(5),changeSummary:null})).rejects.toMatchObject({code:"VALIDATION_ERROR"});});
+it("preserves safe conflict",async()=>{rpc.mockResolvedValue({error:{code:"22023",message:"Private source"}});await expect(createRevisionDraft(input)).rejects.toMatchObject({code:"VALIDATION_ERROR"});});
+it("hides foreign context errors",async()=>{rpc.mockResolvedValue({error:{code:"42501",message:"Private source"}});await expect(createRevisionDraft(input)).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});});
+it("denies changed authenticated identity",async()=>{context.mockResolvedValueOnce({userId:id(4)}).mockResolvedValue({userId:id(9)});await expect(createRevisionDraft(input)).rejects.toMatchObject({code:"FORBIDDEN"});});
+it.each([{status:"CURRENT"},{created_by:id(9)},{previous_version_id:null},{approved_by:id(9),approved_at:"2026-10-07T00:00:00Z"}])("rejects noncanonical response %j",async override=>{rpc.mockResolvedValue({data:{...row,...override}});await expect(createRevisionDraft(input)).rejects.toMatchObject({code:"FORBIDDEN"});});
+it("requires authentication before RPC",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");context.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(createRevisionDraft(input)).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(rpc).not.toHaveBeenCalled();});

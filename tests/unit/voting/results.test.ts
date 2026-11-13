@@ -1,0 +1,21 @@
+import {it,expect,vi,beforeEach} from "vitest";
+vi.mock("server-only",()=>({}));
+const state=vi.hoisted(()=>({actor:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",rpc:vi.fn(),auth:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:state.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {getVotingResults} from "@/features/voting/results";
+const id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const row={session:{id,status:"OPEN",votingType:"DOT_VOTE",voteLimit:3,anonymous:true,revealMode:"LIVE",openedAt:"2026-10-11T12:00:00Z",closedAt:null,revealed:false},options:[{id,sequence:1,label:"Choice",description:null,developmentObject:null,voteCount:0}],totalVotes:0};
+beforeEach(()=>{state.rpc.mockReset();state.auth.mockReset();state.auth.mockResolvedValue({userId:state.actor});state.rpc.mockResolvedValue({data:row,error:null});});
+it("queries one aggregate-only canonical snapshot without identity arguments",async()=>{expect(await getVotingResults(id.toUpperCase())).toEqual(row);expect(state.rpc).toHaveBeenCalledExactlyOnceWith("get_voting_results",{target_session:id});});
+it.each([null,"invalid",{votingSessionId:id},{votingSessionId:id,includeIdentities:true},{votingSessionId:id,forceReveal:true},{votingSessionId:id,userId:id,role:"ADMIN",teamId:id}])("rejects spoofed input %j",async value=>{await expect(getVotingResults(value)).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([true,false])("anonymous %s returns aggregates only",async anonymous=>{state.rpc.mockResolvedValue({data:{...row,session:{...row.session,anonymous}},error:null});expect((await getVotingResults(id)).options[0].voteCount).toBe(0);});
+it("accepts explicit hidden nulls and revealed zero counts",async()=>{
+ const hidden={...row,session:{...row.session,revealMode:"HIDDEN_UNTIL_REVEAL"},options:[{...row.options[0],voteCount:null}],totalVotes:null};state.rpc.mockResolvedValue({data:hidden,error:null});expect(await getVotingResults(id)).toEqual(hidden);
+ const revealed={...row,session:{...row.session,revealMode:"HIDDEN_UNTIL_REVEAL",status:"CLOSED",closedAt:"2026-10-11T12:01:00Z",revealed:true}};state.rpc.mockResolvedValue({data:revealed,error:null});expect((await getVotingResults(id)).totalVotes).toBe(0);
+});
+it.each([{winner:id},{votes:[{user_id:id}]},{totalVotes:3},{session:{...row.session,id:state.actor}},{session:{...row.session,votingType:"FIST_TO_FIVE"}},{session:{...row.session,revealMode:"HIDDEN_UNTIL_REVEAL"}},{options:[{...row.options[0],userId:id}]}])("rejects unsafe or inconsistent provider DTO %j",async patch=>{state.rpc.mockResolvedValue({data:{...row,...patch},error:null});await expect(getVotingResults(id)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it("preserves sequence even when later option has more votes",async()=>{const options=[{...row.options[0],voteCount:1},{...row.options[0],id:state.actor,sequence:2,voteCount:2}];state.rpc.mockResolvedValue({data:{...row,options,totalVotes:3},error:null});expect((await getVotingResults(id)).options).toEqual(options);state.rpc.mockResolvedValue({data:{...row,options:options.toReversed(),totalVotes:3},error:null});await expect(getVotingResults(id)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it.each(["42501","55000","XX000"])("hides provider resource/reveal detail %s",async code=>{state.rpc.mockResolvedValue({error:{code,message:"Private Team"}});await expect(getVotingResults(id)).rejects.toMatchObject({code:"NOT_FOUND",message:"Resource unavailable."});});
+it.each([["0A000","DEPENDENCY_NOT_MET"],["22023","VALIDATION_ERROR"],["28000","AUTH_REQUIRED"]])("maps stable failure %s",async(code,expected)=>{state.rpc.mockResolvedValue({error:{code}});await expect(getVotingResults(id)).rejects.toMatchObject({code:expected});});
+it("rejects changed verified identity",async()=>{state.auth.mockResolvedValueOnce({userId:state.actor}).mockResolvedValue({userId:id});await expect(getVotingResults(id)).rejects.toMatchObject({code:"NOT_FOUND"});expect(state.rpc).not.toHaveBeenCalled();});

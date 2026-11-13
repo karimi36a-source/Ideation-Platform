@@ -1,0 +1,51 @@
+# Local development only. Generated from Supabase CLI 2.118.0, reduced to M0.2.
+# https://supabase.com/docs/guides/local-development/cli/config
+project_id = "FICI_Platform"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "graphql_public"]
+extra_search_path = ["public", "extensions"]
+max_rows = 1000
+
+[db]
+port = 54322
+shadow_port = 54320
+major_version = 17
+
+[db.migrations]
+enabled = true
+schema_paths = []
+
+[db.seed]
+enabled = true
+sql_paths = ["./seed.sql"]
+
+[studio]
+enabled = true
+port = 54323
+api_url = "http://127.0.0.1"
+
+# Provider infrastructure only; authentication workflows are deferred to M1.
+[auth]
+enabled = true
+site_url = "http://localhost:3000"
+additional_redirect_urls = ["http://127.0.0.1:3000", "http://localhost:3000/reset-password", "http://127.0.0.1:3000/reset-password"]
+
+[local_smtp]
+enabled = true
+port = 54324
+
+# Realtime remains unused locally; M12.6 enables private Storage infrastructure.
+[realtime]
+enabled = false
+
+[storage]
+enabled = true
+
+[edge_runtime]
+enabled = false
+
+[analytics]
+enabled = false

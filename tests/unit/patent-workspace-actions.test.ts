@@ -1,0 +1,22 @@
+import {beforeEach,expect,it,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({load:vi.fn(),retain:vi.fn(),search:vi.fn(),evidence:vi.fn(),reading:vi.fn(),revalidate:vi.fn()}));
+vi.mock('@/features/patents/workspace',()=>({getPatentWorkspace:m.load}));
+vi.mock('@/features/patents/create',()=>({createPatentRecord:m.retain}));
+vi.mock('@/features/patents/search',()=>({createPatentSearchLog:m.search}));
+vi.mock('@/features/patents/evidence',()=>({linkPatentToEvidence:m.evidence}));
+vi.mock('@/features/patents/reading',()=>({savePatentReadingFramework:m.reading}));
+vi.mock('next/cache',()=>({revalidatePath:m.revalidate}));
+import {mutatePatentWorkspace} from '@/features/patents/workspace-actions';
+const id='00000000-0000-4000-8000-000000006004';
+const input={projectId:id,workspaceId:id,publicationNumber:'WO 123',title:'Patent',sourceDatabase:'PATENTSCOPE',sourceUrl:'https://example.test'};
+beforeEach(()=>{vi.resetAllMocks();m.load.mockResolvedValue({project:{id,primary_workspace_id:id},canEdit:true,patents:[{id}]});});
+it('saves reading notes through the canonical scoped composition',async()=>{m.load.mockResolvedValue({project:{id,primary_workspace_id:id},canEdit:true,patents:[{id}],activities:[{id}]});const input={activityInstanceId:id,patentRecordId:id,notes:{title:'Title notes',abstract:'Abstract notes',description:'Description notes',claims:'Claim notes',drawings:'Drawing notes',bibliographic_information:'Bibliographic notes'}};expect((await mutatePatentWorkspace({operation:'reading',projectId:id,input})).ok).toBe(true);expect(m.reading).toHaveBeenCalledWith({...input,artifactVersionId:null,expectedDraftRevision:null});expect(m.evidence).not.toHaveBeenCalled();});
+it('retains through existing service with exact contract and refreshes canonical route',async()=>{expect((await mutatePatentWorkspace({operation:'retain',projectId:id,input})).ok).toBe(true);expect(m.retain).toHaveBeenCalledExactlyOnceWith(input);expect(m.revalidate).toHaveBeenCalledWith('/projects/'+id+'/patents');});
+it('records search through accepted operation',async()=>{const v={projectId:id,workspaceId:id,activityInstanceId:id,databaseName:'USPTO',queryText:'Query',searchMethod:'Keywords',reason:'Reason'};expect((await mutatePatentWorkspace({operation:'searchLog',projectId:id,input:v})).ok).toBe(true);expect(m.search).toHaveBeenCalledExactlyOnceWith(v);});
+it('creates claim Evidence only through approved service',async()=>{const v={patentRecordId:id,evidenceType:'PATENT_CLAIM',title:'Claim',description:'Source fact',claimLocator:'Claim 2'};expect((await mutatePatentWorkspace({operation:'evidence',projectId:id,input:v})).ok).toBe(true);expect(m.evidence).toHaveBeenCalledExactlyOnceWith(v);});
+it.each([{...input,createdBy:id},{...input,force:true}])('rejects spoofed/unknown input before any service',async input=>{expect((await mutatePatentWorkspace({operation:'retain',projectId:id,input})).ok).toBe(false);expect(m.load).not.toHaveBeenCalled();expect(m.retain).not.toHaveBeenCalled();});
+it('rejects foreign Project/Workspace, inaccessible Patent and read-only actor',async()=>{expect((await mutatePatentWorkspace({operation:'retain',projectId:id,input:{...input,workspaceId:'00000000-0000-4000-8000-000000006005'}})).ok).toBe(false);m.load.mockResolvedValue({project:{id,primary_workspace_id:id},canEdit:true,patents:[]});expect((await mutatePatentWorkspace({operation:'evidence',projectId:id,input:{patentRecordId:id,evidenceType:'PATENT',title:'T',description:'D'}})).ok).toBe(false);m.load.mockResolvedValue({canEdit:false});expect((await mutatePatentWorkspace({operation:'retain',projectId:id,input})).ok).toBe(false);expect(m.retain).not.toHaveBeenCalled();expect(m.evidence).not.toHaveBeenCalled();});
+it('does not expose private service errors',async()=>{m.load.mockRejectedValue(Error('Private Team query'));expect(await mutatePatentWorkspace({operation:'retain',projectId:id,input})).toEqual({ok:false,message:expect.not.stringContaining('Private Team')});});
+
+it.each(['compare','comparePatentWithProject','runAiTask'])('rejects deferred operation %s before loading private research',async operation=>{expect((await mutatePatentWorkspace({operation,projectId:id,input})).ok).toBe(false);expect(m.load).not.toHaveBeenCalled();expect(m.retain).not.toHaveBeenCalled();expect(m.evidence).not.toHaveBeenCalled();expect(m.search).not.toHaveBeenCalled();});

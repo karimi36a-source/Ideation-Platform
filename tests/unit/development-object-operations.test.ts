@@ -1,0 +1,38 @@
+import {beforeEach,it,expect,vi} from "vitest";
+vi.mock("server-only",()=>({}));
+const {user,bindings,rpc,client,access}=vi.hoisted(()=>({user:vi.fn(),bindings:vi.fn(),rpc:vi.fn(),client:vi.fn(),access:vi.fn()}));
+vi.mock("@/features/users/service",()=>({requireActivePlatformUser:user}));
+vi.mock("@/features/auth/role-assignments",()=>({getActiveRoleAssignments:bindings}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:client}));
+vi.mock("@/features/workspaces/access",()=>({getWorkspaceAccess:access}));
+import {createDevelopmentObject,updateDevelopmentObject,archiveDevelopmentObject} from "@/features/projects/object-service";
+const uuid=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
+const actor=uuid(6601),project=uuid(6602),workspace=uuid(6603),id=uuid(6604);
+const stamp="2026-10-04T00:00:00Z";
+let row:Record<string,unknown>,visible:boolean;
+const input=()=>({projectId:project,workspaceId:workspace,objectType:"PROBLEM",title:"Problem",content:"Content",originType:"User"});
+beforeEach(()=>{
+ row={id,project_id:project,workspace_id:workspace,object_type:"PROBLEM",title:"Problem",content:"Content",status:null,verification_status:null,origin_type:"User",origin_reference_id:null,created_by:actor,current_version_number:1,archived_at:null,metadata:{},created_at:stamp,updated_at:stamp};visible=true;
+ user.mockReset().mockResolvedValue({id:actor});bindings.mockReset().mockResolvedValue([]);access.mockReset().mockResolvedValue({canView:true,canCreate:true,canEdit:true});
+ rpc.mockReset().mockImplementation(async(name:string,args:{changes?:Record<string,unknown>})=>({error:null,data:name==="archive_development_object"?{...row,archived_at:stamp}:name==="update_development_object"?{...row,...args.changes}:row}));
+ client.mockReset().mockResolvedValue({rpc,from:(table:string)=>({select:()=>({eq:()=>({maybeSingle:async()=>({error:null,data:visible?(table==="development_projects"?{id:project,primary_workspace_id:workspace}:row):null})})})})});
+});
+it("creates canonical object with server-derived creator and no identity input",async()=>{expect(await createDevelopmentObject(input())).toEqual(row);expect(rpc).toHaveBeenCalledWith("create_development_object",expect.objectContaining({target_project:project,target_workspace:workspace,kind:"PROBLEM",object_metadata:{}}));expect(rpc.mock.calls[0][1]).not.toHaveProperty("created_by");});
+it.each(["IDEA","RISK"])("creates approved %s",async objectType=>{row.object_type=objectType;expect((await createDevelopmentObject({...input(),objectType})).object_type).toBe(objectType);});
+it.each([{created_by:uuid(6699)},{userId:uuid(6699)},{role:"ADMIN"},{objectType:"OTHER"},{title:" "},{metadata:[]}])("rejects forged/invalid create %j",async changes=>{await expect(createDevelopmentObject({...input(),...changes})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("denies anonymous before DB work",async()=>{user.mockRejectedValue({code:"AUTH_REQUIRED"});await expect(createDevelopmentObject(input())).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(client).not.toHaveBeenCalled();});
+it("Project visibility is required despite Workspace capability",async()=>{visible=false;await expect(createDevelopmentObject(input())).rejects.toMatchObject({code:"FORBIDDEN"});expect(rpc).not.toHaveBeenCalled();});
+it("Workspace write is required despite Project visibility",async()=>{access.mockResolvedValue({canCreate:false,canEdit:false});await expect(createDevelopmentObject(input())).rejects.toMatchObject({code:"FORBIDDEN"});expect(rpc).not.toHaveBeenCalled();});
+it("rejects incompatible Project/Workspace",async()=>{await expect(createDevelopmentObject({...input(),workspaceId:uuid(6699)})).rejects.toMatchObject({code:"FORBIDDEN"});expect(rpc).not.toHaveBeenCalled();});
+it("updates same identity and version with narrow patch",async()=>{const o=await updateDevelopmentObject({objectId:id,title:"Updated",content:"New",metadata:{tag:"Safety"}});expect(o).toMatchObject({id,project_id:project,workspace_id:workspace,created_by:actor,current_version_number:1,title:"Updated",content:"New"});});
+it.each([{project_id:uuid(6699)},{workspace_id:uuid(6699)},{object_type:"IDEA"},{created_by:uuid(6699)},{archived_at:null},{current_version_number:2},{status:"approved"}])("rejects generic identity/lifecycle patch %j",async changes=>{await expect(updateDevelopmentObject({objectId:id,title:"New",...changes})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("denies archived normal edit",async()=>{row.archived_at=stamp;await expect(updateDevelopmentObject({objectId:id,title:"New"})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it("denies inaccessible exact object ID safely",async()=>{visible=false;await expect(updateDevelopmentObject({objectId:id,title:"New"})).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});});
+it("archive retains stable fields and retries safely",async()=>{const first=await archiveDevelopmentObject(id);row={...first};expect(await archiveDevelopmentObject(id)).toEqual(first);expect(first).toMatchObject({id,project_id:project,workspace_id:workspace,created_by:actor,content:"Content",created_at:stamp,updated_at:stamp,current_version_number:1,archived_at:stamp});});
+it("archive requires edit capability",async()=>{access.mockResolvedValue({canEdit:false});await expect(archiveDevelopmentObject(id)).rejects.toMatchObject({code:"FORBIDDEN"});expect(rpc).not.toHaveBeenCalled();});
+it("does not expose RPC provider diagnostics",async()=>{rpc.mockResolvedValue({error:{code:"42501",message:"Private scope"},data:null});await expect(updateDevelopmentObject({objectId:id,title:"New"})).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});});
+it("detects identity change before mutation",async()=>{user.mockResolvedValueOnce({id:actor}).mockResolvedValue({id:uuid(6699)});await expect(createDevelopmentObject(input())).rejects.toMatchObject({code:"FORBIDDEN"});expect(rpc).not.toHaveBeenCalled();});
+it("does not accept canonical creator spoofing",async()=>{rpc.mockResolvedValue({data:{...row,created_by:uuid(6699)},error:null});await expect(createDevelopmentObject(input())).rejects.toMatchObject({code:"FORBIDDEN"});});
+
+it.each([uuid(6604),uuid(6699)])("M6.16 inaccessible/nonexistent Object %s gives the same opaque service failure",async objectId=>{visible=false;await expect(updateDevelopmentObject({objectId,title:"No"})).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});expect(rpc).not.toHaveBeenCalled();});
+it.each([{projectId:uuid(6699)},{workspaceId:uuid(6699)},{ownerUserId:uuid(6699)},{ownerTeamId:uuid(6699)},{changedBy:uuid(6699)},{createdBy:uuid(6699)},{archivedAt:null},{userId:uuid(6699)},{projectRole:"participant"},{startsAt:stamp},{endsAt:null},{cohortId:uuid(6699)}])("M6.16 service rejects forged identity/scope patch %j",async patch=>{await expect(updateDevelopmentObject({objectId:id,title:"No",...patch})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});

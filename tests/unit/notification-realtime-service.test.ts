@@ -1,0 +1,14 @@
+import {beforeEach,expect,it,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({auth:vi.fn(),list:vi.fn()}));
+vi.mock('@/lib/auth/authorization',()=>({getAuthorizationContext:m.auth,AuthorizationError:class extends Error{constructor(public code:string){super(code);}}}));
+vi.mock('@/features/notifications/list',()=>({listMyNotifications:m.list}));
+import {getNotificationSubscription,reloadNotificationPage} from '@/features/notifications/realtime-service';
+import {authorizeNotificationRealtime,loadNotificationRealtimePage} from '@/features/notifications/realtime-actions';
+const a='00000000-0000-4000-8000-000000006004',b='00000000-0000-4000-8000-000000006006';
+beforeEach(()=>{vi.resetAllMocks();m.auth.mockResolvedValue({userId:a});m.list.mockResolvedValue({items:[],nextCursor:null});});
+it('server-derived recipient has no caller identity/scope input',async()=>{expect(await getNotificationSubscription()).toEqual({userId:a,topic:'notifications:'+a});});
+it('reload uses M15.4 canonical list and binds response to checked identity',async()=>{expect(await reloadNotificationPage({limit:100})).toEqual({userId:a,page:{items:[],nextCursor:null}});expect(m.list).toHaveBeenCalledExactlyOnceWith({limit:100});});
+it('identity change during listing fails closed',async()=>{m.auth.mockResolvedValueOnce({userId:a}).mockResolvedValueOnce({userId:b});await expect(reloadNotificationPage({})).rejects.toMatchObject({code:'AUTH_REQUIRED'});});
+it('unauthenticated and private errors are sanitized by server bridge',async()=>{m.auth.mockRejectedValue(new Error('PRIVATE_DIAGNOSTIC'));expect(await authorizeNotificationRealtime()).toEqual({ok:false});expect(await loadNotificationRealtimePage({})).toEqual({ok:false});});
+it('does not accept recipient claims through canonical reload input',async()=>{m.list.mockRejectedValue(new Error('VALIDATION_ERROR'));expect(await loadNotificationRealtimePage({recipientUserId:b})).toEqual({ok:false});});

@@ -1,0 +1,18 @@
+import {beforeEach,expect,it,vi} from "vitest";
+import {saveMindMapDraftSchema,savedMindMapDraftSchema} from "@/features/mind-map/draft-schema";
+const auth=vi.hoisted(()=>vi.fn());
+const rpc=vi.hoisted(()=>vi.fn());
+vi.mock("server-only",()=>({}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<object>(),getAuthorizationContext:auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {saveMindMapDraft} from "@/features/mind-map/draft";
+const id="00000000-0000-4000-8000-000000000001",version="00000000-0000-4000-8000-000000000002";
+const input={mindMapId:id,expectedDraftRevision:4},result={mindMapId:id,artifactVersionId:version,draftRevision:5};
+beforeEach(()=>{vi.resetAllMocks();auth.mockResolvedValue({userId:id});rpc.mockResolvedValue({data:result,error:null});});
+it("saves only exact canonical ID and the accepted M8 token",async()=>{await expect(saveMindMapDraft(input)).resolves.toEqual(result);expect(rpc).toHaveBeenCalledWith("save_mind_map_draft",{input});expect(savedMindMapDraftSchema.safeParse(result).success).toBe(true);});
+it.each(["actor","userId","projectId","workspaceId","teamId","artifactId","artifactVersionId","createdBy","status","versionNumber","nodes","edges","roomId","contentSnapshot"])("rejects authority or live graph field %s",async field=>{await expect(saveMindMapDraft({...input,[field]:id})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it.each([-1,0.1,2147483648,null,undefined,"4"])("requires exact whole-Draft revision %s",revision=>expect(saveMindMapDraftSchema.safeParse({...input,expectedDraftRevision:revision}).success).toBe(false));
+it("requires authentication and masks identity drift",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");auth.mockRejectedValueOnce(new AuthorizationError("AUTH_REQUIRED"));await expect(saveMindMapDraft(input)).rejects.toMatchObject({code:"AUTH_REQUIRED"});auth.mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:version});await expect(saveMindMapDraft(input)).rejects.toMatchObject({code:"NOT_FOUND"});expect(rpc).not.toHaveBeenCalled();});
+it("rejects identity drift after persistence response",async()=>{auth.mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:id}).mockResolvedValueOnce({userId:version});await expect(saveMindMapDraft(input)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it.each([["23505","CONFLICT"],["55000","INVALID_STATE"],["22023","VALIDATION_ERROR"],["42501","NOT_FOUND"],["28000","AUTH_REQUIRED"]])("maps %s safely",async(code,expected)=>{rpc.mockResolvedValue({error:{code,message:"Private map"}});await expect(saveMindMapDraft(input)).rejects.toMatchObject({code:expected});});
+it.each([{...result,mindMapId:version},{...result,draftRevision:4},{...result,artifactVersionId:"fake"}])("rejects noncanonical response %#",async data=>{rpc.mockResolvedValue({data,error:null});await expect(saveMindMapDraft(input)).rejects.toMatchObject({code:"NOT_FOUND"});});

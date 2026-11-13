@@ -1,0 +1,2 @@
+import {z} from "zod";
+export const updateProjectMetadataSchema=z.strictObject({projectId:z.uuid(),name:z.string().trim().min(1).max(200).optional(),description:z.string().nullable().optional(),status:z.enum(["active","paused","completed"]).optional(),currentStage:z.string().trim().min(1).nullable().optional()}).refine(v=>v.name!==undefined||v.description!==undefined||v.status!==undefined||v.currentStage!==undefined);

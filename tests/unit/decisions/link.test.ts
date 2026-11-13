@@ -1,0 +1,18 @@
+import {it,expect,vi,beforeEach} from "vitest";
+vi.mock("server-only",()=>({}));
+const state=vi.hoisted(()=>({rpc:vi.fn(),auth:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:state.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {linkDecisionEntity} from "@/features/decisions/link";
+const id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",actor="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const input={decisionId:id,linkedEntityType:"ARTIFACT",linkedEntityId:id,relationshipType:"CONSIDERED_IN_DECISION"};
+const result={id,decision_id:id,linked_entity_type:"ARTIFACT",linked_entity_id:id,relationship_type:"CONSIDERED_IN_DECISION"};
+beforeEach(()=>{state.rpc.mockReset();state.auth.mockReset();state.auth.mockResolvedValue({userId:actor});state.rpc.mockResolvedValue({data:result,error:null});});
+it("returns only canonical persisted Link",async()=>{expect(await linkDecisionEntity(input)).toEqual(result);expect(state.rpc).toHaveBeenCalledExactlyOnceWith("link_decision_entity",{input});});
+it.each(["userId","role","projectId","workspaceId","teamId","createdBy","status","targetOwnerUserId","permissions","accessGrant"])("rejects additional %s",async key=>{await expect(linkDecisionEntity({...input,[key]:id})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each(["EVIDENCE","AI_OUTPUT"])("defers %s without RPC",async kind=>{await expect(linkDecisionEntity({...input,linkedEntityType:kind})).rejects.toMatchObject({code:"DEPENDENCY_REQUIRED"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([{linkedEntityType:"DECISION"},{relationshipType:"INFORMED_BY"},{relationshipType:"SUPERSEDES"},{linkedEntityType:"VOTING_SESSION"},{linkedEntityId:"invalid"}])("rejects wrong pair/input %j",async patch=>{await expect(linkDecisionEntity({...input,...patch})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([["42501","NOT_FOUND"],["23503","NOT_FOUND"],["55000","INVALID_STATE"],["22023","VALIDATION_ERROR"],["28000","AUTH_REQUIRED"]])("maps provider %s without leaking",async(code,expected)=>{state.rpc.mockResolvedValue({error:{code,message:"Private target details"}});await expect(linkDecisionEntity(input)).rejects.toMatchObject({code:expected});});
+it("anonymous never reaches RPC",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");state.auth.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(linkDecisionEntity(input)).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(state.rpc).not.toHaveBeenCalled();});
+it("changed identity never reaches RPC",async()=>{state.auth.mockResolvedValueOnce({userId:actor}).mockResolvedValue({userId:id});await expect(linkDecisionEntity(input)).rejects.toMatchObject({code:"NOT_FOUND"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([{decision_id:actor},{linked_entity_id:actor},{relationship_type:"INFORMED_BY"},{secret:"private"}])("rejects noncanonical response %j",async patch=>{state.rpc.mockResolvedValue({data:{...result,...patch},error:null});await expect(linkDecisionEntity(input)).rejects.toMatchObject({code:"NOT_FOUND"});});

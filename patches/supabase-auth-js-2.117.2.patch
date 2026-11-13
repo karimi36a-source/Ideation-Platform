@@ -1,0 +1,12 @@
+diff --git a/dist/main/lib/webauthn.dom.d.ts b/dist/main/lib/webauthn.dom.d.ts
+--- a/dist/main/lib/webauthn.dom.d.ts
++++ b/dist/main/lib/webauthn.dom.d.ts
+@@ -501,1 +501,1 @@
+-export interface PublicKeyCredentialFuture<T extends PublicKeyCredentialJSON = PublicKeyCredentialJSON> extends PublicKeyCredential {
++export interface PublicKeyCredentialFuture<T extends PublicKeyCredentialJSON = PublicKeyCredentialJSON> extends Omit<PublicKeyCredential, "toJSON"> {
+diff --git a/dist/module/lib/webauthn.dom.d.ts b/dist/module/lib/webauthn.dom.d.ts
+--- a/dist/module/lib/webauthn.dom.d.ts
++++ b/dist/module/lib/webauthn.dom.d.ts
+@@ -501,1 +501,1 @@
+-export interface PublicKeyCredentialFuture<T extends PublicKeyCredentialJSON = PublicKeyCredentialJSON> extends PublicKeyCredential {
++export interface PublicKeyCredentialFuture<T extends PublicKeyCredentialJSON = PublicKeyCredentialJSON> extends Omit<PublicKeyCredential, "toJSON"> {

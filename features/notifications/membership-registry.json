@@ -1,0 +1,14 @@
+{
+  "MEMBER_ADDED": {
+    "title": "Team membership updated",
+    "body": "You have been added to a Team."
+  },
+  "MEMBER_REMOVED": {
+    "title": "Team membership updated",
+    "body": "Your Team membership has ended."
+  },
+  "MEMBER_MOVED": {
+    "title": "Team membership updated",
+    "body": "Your Team assignment has changed."
+  }
+}

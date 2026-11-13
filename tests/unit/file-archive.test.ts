@@ -1,0 +1,16 @@
+import {beforeEach,expect,it,vi} from "vitest";
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn()}));
+vi.mock('@/lib/auth/authorization',async original=>({...await original<typeof import('@/lib/auth/authorization')>(),getAuthorizationContext:m.auth}));
+vi.mock('@/lib/db/server',()=>({createServerSupabaseClient:async()=>({rpc:m.rpc})}));
+import {archiveFile} from '@/features/files/archive';
+import {AuthorizationError} from '@/lib/auth/authorization';
+const id='00000000-0000-4000-8000-000000006004';
+const row={id,uploaded_by:id,workspace_id:id,project_id:null,storage_reference:`workspaces/${id}/files/${id}`,filename:'history.txt',mime_type:'text/plain',size:3,status:'archived',created_at:'2026-10-26T00:00:00Z',updated_at:'2026-10-26T01:00:00Z',updated_by:id,archived_at:'2026-10-26T01:00:00Z'};
+beforeEach(()=>{vi.resetAllMocks();m.auth.mockResolvedValue({userId:id});m.rpc.mockResolvedValue({data:row,error:null});});
+it('returns canonical archived metadata on repeated calls',async()=>{expect(await archiveFile(id)).toEqual(row);expect(await archiveFile(id)).toEqual(row);expect(m.rpc).toHaveBeenCalledWith('archive_file',{target_file:id});});
+it.each([null,{},[],{fileId:id},'bad',12])('rejects malformed argument without RPC',async input=>{await expect(archiveFile(input)).rejects.toMatchObject({code:'VALIDATION_ERROR'});expect(m.rpc).not.toHaveBeenCalled();});
+it('anonymous denied',async()=>{m.auth.mockRejectedValue(new AuthorizationError('AUTH_REQUIRED'));await expect(archiveFile(id)).rejects.toMatchObject({code:'AUTH_REQUIRED'});expect(m.rpc).not.toHaveBeenCalled();});
+it('denial reveals no private database detail',async()=>{m.rpc.mockResolvedValue({error:{code:'42501',message:'private storage detail'}});await expect(archiveFile(id)).rejects.toMatchObject({code:'NOT_FOUND',message:expect.not.stringContaining('private storage detail')});});
+it('identity switch does not return metadata',async()=>{m.auth.mockResolvedValueOnce({userId:id}).mockResolvedValue({userId:'foreign'});await expect(archiveFile(id)).rejects.toMatchObject({code:'NOT_FOUND'});});
+it('rejects unarchived response',async()=>{m.rpc.mockResolvedValue({data:{...row,status:'active',archived_at:null},error:null});await expect(archiveFile(id)).rejects.toMatchObject({code:'NOT_FOUND'});});

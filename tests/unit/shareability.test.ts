@@ -1,0 +1,28 @@
+import {beforeEach,describe,expect,it,vi} from "vitest";
+vi.mock("server-only",()=>({}));
+const m=vi.hoisted(()=>({auth:vi.fn(),rpc:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:m.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:m.rpc})}));
+import {resolveShareability} from "@/features/shares/shareability";
+import {AuthorizationError} from "@/lib/auth/authorization";
+import {shareabilityInputSchema,shareabilityResultSchema} from "@/features/shares/shareability-schema";
+const id="00000000-0000-4000-8000-000000006004",other="00000000-0000-4000-8000-000000006007";
+const input={entityType:"PATENT_RECORD",entityId:id,destinationType:"TEAM",destinationId:other,permissionLevel:"VIEW",shareMode:"SNAPSHOT"};
+const allowed={allowed:true,sourceWorkspaceId:id,normalizedEntityType:"PATENT_RECORD",normalizedDestination:{type:"TEAM",id:other},allowedPermissionLevels:["VIEW","COMMENT"],allowedModes:["SNAPSHOT"]};
+describe("M13.3 server-only shareability boundary",()=>{
+ beforeEach(()=>{vi.resetAllMocks();m.auth.mockResolvedValue({userId:id,assignments:[]});m.rpc.mockResolvedValue({data:allowed,error:null});});
+ it("uses caller-scoped canonical RPC twice, with no client actor/scope or writes",async()=>{expect(await resolveShareability(input)).toEqual(allowed);expect(m.rpc).toHaveBeenCalledTimes(2);expect(m.rpc).toHaveBeenCalledWith("resolve_shareability",{input});});
+ it("COLLABORATE cannot inherit a generic allowed resolver response",async()=>{expect(await resolveShareability({...input,permissionLevel:"COLLABORATE"})).toEqual({allowed:false,deniedReason:"PERMISSION_NOT_ALLOWED"});expect(m.rpc).not.toHaveBeenCalled();});
+ it.each(["VIEW","COMMENT","COLLABORATE"])("LIVE_REFERENCE/%s remains deferred",async permissionLevel=>{expect(await resolveShareability({...input,permissionLevel,shareMode:"LIVE_REFERENCE"})).toEqual({allowed:false,deniedReason:"MODE_NOT_ALLOWED"});expect(m.rpc).not.toHaveBeenCalled();});
+ it("anonymous has no metadata query",async()=>{m.auth.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));expect(await resolveShareability(input)).toEqual({allowed:false,deniedReason:"UNAUTHENTICATED"});expect(m.rpc).not.toHaveBeenCalled();});
+ it.each(["actorId","sourceWorkspaceId","sharedBy","revokedAt","force","snapshotData"])("rejects spoofed %s",async key=>{expect(await resolveShareability({...input,[key]:id})).toEqual({allowed:false,deniedReason:"VALIDATION_ERROR"});expect(m.rpc).not.toHaveBeenCalled();});
+ it("rejects unsupported source taxonomy",async()=>{expect(await resolveShareability({...input,entityType:"SEARCH_LOG"})).toEqual({allowed:false,deniedReason:"ENTITY_NOT_SHAREABLE"});});
+ it.each([null,{},[],{...input,entityId:"bad"},{...input,destinationId:null}])("rejects malformed input %#",async v=>{expect((await resolveShareability(v)).allowed).toBe(false);expect(m.rpc).not.toHaveBeenCalled();});
+ it.each(["SOURCE_ACCESS_DENIED","SHARE_AUTHORITY_DENIED","SOURCE_RESTRICTED","DESTINATION_INVALID","DESTINATION_SCOPE_DENIED","PERMISSION_NOT_ALLOWED","MODE_NOT_ALLOWED"])("preserves safe denial %s",async deniedReason=>{m.rpc.mockResolvedValue({data:{allowed:false,deniedReason},error:null});expect(await resolveShareability(input)).toEqual({allowed:false,deniedReason});expect(m.rpc).toHaveBeenCalledTimes(1);});
+ it("withholds stale permission after revocation",async()=>{m.rpc.mockResolvedValueOnce({data:allowed,error:null}).mockResolvedValueOnce({data:{allowed:false,deniedReason:"SHARE_AUTHORITY_DENIED"},error:null});expect(await resolveShareability(input)).toEqual({allowed:false,deniedReason:"SHARE_AUTHORITY_DENIED"});});
+ it("withholds result on identity switch",async()=>{m.auth.mockResolvedValueOnce({userId:id}).mockResolvedValue({userId:other});expect((await resolveShareability(input)).allowed).toBe(false);expect(m.rpc).toHaveBeenCalledTimes(1);});
+ it.each([{...allowed,sourceWorkspaceId:other},{...allowed,normalizedDestination:{type:"TEAM",id}},{...allowed,normalizedEntityType:"FILE"}])("rejects result mismatch %#",async result=>{m.rpc.mockResolvedValueOnce({data:allowed,error:null}).mockResolvedValueOnce({data:result,error:null});expect((await resolveShareability(input)).allowed).toBe(false);});
+ it.each([{...allowed,privateNotes:"secret"},{allowed:false,deniedReason:"SOURCE_ACCESS_DENIED",title:"secret"},{...allowed,allowedModes:["LIVE_REFERENCE"]},{...allowed,allowedPermissionLevels:["COLLABORATE"]}])("rejects leaking/noncanonical response %#",async data=>{m.rpc.mockResolvedValue({data,error:null});expect(await resolveShareability(input)).toEqual({allowed:false,deniedReason:"SOURCE_ACCESS_DENIED"});});
+ it("sanitizes backend diagnostics",async()=>{m.rpc.mockRejectedValue(Error("private source credentials"));expect(await resolveShareability(input)).toEqual({allowed:false,deniedReason:"SOURCE_ACCESS_DENIED"});});
+ it("retains vocabulary without advertising deferred runtime capability",()=>{expect(shareabilityInputSchema.safeParse({...input,shareMode:"LIVE_REFERENCE",permissionLevel:"COLLABORATE"}).success).toBe(true);expect(shareabilityResultSchema.safeParse({...allowed,allowedModes:["LIVE_REFERENCE"]}).success).toBe(false);});
+});

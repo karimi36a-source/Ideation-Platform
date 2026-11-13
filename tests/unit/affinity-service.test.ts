@@ -1,0 +1,14 @@
+import {beforeEach,it,expect,vi} from "vitest";
+const state=vi.hoisted(()=>({actor:"00000000-0000-4000-8000-000000000001",rpc:vi.fn(),auth:vi.fn()}));
+vi.mock("server-only",()=>({}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:state.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {createAffinityGroup,renameAffinityGroup} from "@/features/affinity/service";
+const row={id:"00000000-0000-4000-8000-000000000002",activity_instance_id:"00000000-0000-4000-8000-000000000003",name:"Label",description:null,sequence:1,created_by:state.actor,created_at:"2026-10-13T00:00:00Z"};
+beforeEach(()=>{state.auth.mockReset().mockResolvedValue({userId:state.actor});state.rpc.mockReset().mockResolvedValue({data:row,error:null});});
+it("uses strict normalized RPC input without identity or sequence claims",async()=>{expect(await createAffinityGroup({activityInstanceId:row.activity_instance_id,name:" Label "})).toEqual(row);expect(state.rpc).toHaveBeenCalledWith("create_affinity_group",{input:{activityInstanceId:row.activity_instance_id,name:"Label"}});});
+it("rejects public spoofing before RPC",async()=>{await expect(createAffinityGroup({activityInstanceId:row.activity_instance_id,name:"Label",createdBy:state.actor})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it("does not trust a forged returned creator",async()=>{state.rpc.mockResolvedValue({data:{...row,created_by:row.id},error:null});await expect(createAffinityGroup({activityInstanceId:row.activity_instance_id,name:"Label"})).rejects.toMatchObject({code:"NOT_FOUND"});});
+it("keeps original provenance when another currently authorized editor renames",async()=>{state.rpc.mockResolvedValue({data:{...row,created_by:row.id},error:null});expect((await renameAffinityGroup({affinityGroupId:row.id,name:"Label"})).created_by).toBe(row.id);});
+it("masks private database errors",async()=>{state.rpc.mockResolvedValue({data:null,error:{code:"42501",message:"Private scope payload"}});await expect(renameAffinityGroup({affinityGroupId:row.id,name:"Label"})).rejects.toMatchObject({code:"NOT_FOUND"});});
+it("denies anonymous callers",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");state.auth.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(createAffinityGroup({activityInstanceId:row.activity_instance_id,name:"Label"})).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(state.rpc).not.toHaveBeenCalled();});

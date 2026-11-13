@@ -1,0 +1,18 @@
+import {it,expect,vi,beforeEach} from "vitest";
+vi.mock("server-only",()=>({}));
+const state=vi.hoisted(()=>({actor:"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",rpc:vi.fn(),auth:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:state.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:state.rpc})}));
+import {castVote} from "@/features/voting/cast";
+const id="bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const input={votingSessionId:id,votingOptionId:id,value:1};
+const row={id,voting_session_id:id,voting_option_id:id,user_id:state.actor,value:1,created_at:"2026-10-11T12:00:00Z",revealed_at:null};
+beforeEach(()=>{state.rpc.mockReset();state.auth.mockReset();state.auth.mockResolvedValue({userId:state.actor});state.rpc.mockResolvedValue({data:row,error:null});});
+it("returns only canonical vote with no client identity or retry",async()=>{expect(await castVote(input)).toEqual(row);expect(state.rpc).toHaveBeenCalledExactlyOnceWith("cast_vote",{target_session:id,target_option:id,dot_value:1});});
+it.each([0,2,-1,1.5,"1",null])("rejects non-dot value %j",async value=>{await expect(castVote({...input,value})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each(["userId","role","projectId","workspaceId","teamId","voteCount","revealedAt","createdAt","status"]) ("rejects extra claim %s",async key=>{await expect(castVote({...input,[key]:id})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(state.rpc).not.toHaveBeenCalled();});
+it.each([null,{}, {...input,votingSessionId:"invalid"},{...input,votingOptionId:"invalid"}])("rejects invalid contract %j",async value=>{await expect(castVote(value)).rejects.toMatchObject({code:"VALIDATION_ERROR"});});
+it.each([{user_id:id},{value:2},{revealed_at:row.created_at},{voting_session_id:state.actor},{voting_option_id:state.actor},{privatePayload:"hidden"}])("rejects unexpected canonical row %j",async patch=>{state.rpc.mockResolvedValue({data:{...row,...patch},error:null});await expect(castVote(input)).rejects.toMatchObject({code:"NOT_FOUND"});});
+it.each([["23505","CONFLICT"],["55000","INVALID_STATE"],["0A000","DEPENDENCY_NOT_MET"],["22023","VALIDATION_ERROR"],["28000","AUTH_REQUIRED"],["42501","NOT_FOUND"],["XX000","NOT_FOUND"]])("maps safe error %s",async(code,expected)=>{state.rpc.mockResolvedValue({error:{code,message:"Private Team"}});await expect(castVote(input)).rejects.toMatchObject({code:expected});expect(state.rpc).toHaveBeenCalledTimes(1);});
+it("rejects identity change before database call",async()=>{state.auth.mockResolvedValueOnce({userId:state.actor}).mockResolvedValue({userId:id});await expect(castVote(input)).rejects.toMatchObject({code:"NOT_FOUND"});expect(state.rpc).not.toHaveBeenCalled();});
+it("rejects identity change after database call",async()=>{state.auth.mockResolvedValueOnce({userId:state.actor}).mockResolvedValueOnce({userId:state.actor}).mockResolvedValue({userId:id});await expect(castVote(input)).rejects.toMatchObject({code:"NOT_FOUND"});});

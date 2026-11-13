@@ -1,0 +1,28 @@
+reset role;
+create temporary table df_drafts(label text primary key,payload jsonb);
+create temporary table df_artifacts(label text primary key,id uuid);
+grant select,insert on df_drafts,df_artifacts to authenticated;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006009',true);
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006007',true);
+insert into df_artifacts select 'Team B',(public.create_artifact((payload->>'id')::uuid,(payload->>'primary_workspace_id')::uuid,'PITCH_DECK_RECORD','Foreign considered',null,false,false)->>'artifactId')::uuid from logged_projects where label='Brainstorm Team B';
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006009',true);
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006002',true);
+select public.open_voting_session((payload#>>'{session,id}')::uuid) from vc_results where jsonb_array_length(payload->'options')=3;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006004',true);
+select public.cast_vote((payload#>>'{session,id}')::uuid,(select (o->>'id')::uuid from jsonb_array_elements(payload->'options') o where o->>'label'='PROBLEM'),1) from vc_results where jsonb_array_length(payload->'options')=3;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006002',true);
+select public.close_voting_session((payload#>>'{session,id}')::uuid) from vc_results where jsonb_array_length(payload->'options')=3;
+reset role;
+do $$begin assert not exists(select 1 from public.decisions),'AT-VOTE-003: no automatic Decision';end $$;
+set local role authenticated;
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006009',true);
+insert into df_drafts select f.label,public.create_decision(jsonb_build_object('projectId',p.payload->>'id','workspaceId',p.payload->>'primary_workspace_id','title','Human decision','question','What next?','method','DISCUSSION','activityInstanceId',case when f.label='Completed' then (select id from vc_activities where n=3) when f.label='Archived Activity' then (select id from vc_activities where n=4) else (select id from vc_activities where n=2) end,'options',jsonb_build_array(jsonb_build_object('label','Highest votes','developmentObjectId',(select id from vc_objects where kind='PROBLEM')),jsonb_build_object('label','Human alternative','developmentObjectId',(select id from vc_objects where kind='SOLUTION')))))
+from logged_projects p cross join unnest(array['Team','Owner demoted','Owner removed','Master different','No selection','Existing participant','Completed','Archived Activity','Superseded','Archived Decision','Participant failure','Link failure','Log failure','Same race','Conflict race']) f(label) where p.label='Team';
+insert into df_artifacts select 'Team',(public.create_artifact((payload->>'id')::uuid,(payload->>'primary_workspace_id')::uuid,'PITCH_DECK_RECORD','Considered',null,false,false)->>'artifactId')::uuid from logged_projects where label='Team';
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006002',true);
+insert into df_drafts select f.label,public.create_decision(jsonb_build_object('projectId',payload->>'id','workspaceId',payload->>'primary_workspace_id','title','Master source','question','Q','method','OTHER','options','[{"label":"A"}]'::jsonb)) from logged_projects p cross join unnest(array['Master owner','Lead different']) f(label) where p.label='Team';
+select set_config('request.jwt.claim.sub','00000000-0000-4000-8000-000000006004',true);
+insert into df_drafts select 'Personal',public.create_decision(jsonb_build_object('projectId',payload->>'id','workspaceId',payload->>'primary_workspace_id','title','Private','question','Q','method','OTHER','options','[{"label":"A"}]'::jsonb)) from logged_projects where label='Individual';
+insert into df_artifacts select 'Personal',(public.create_artifact((payload->>'id')::uuid,(payload->>'primary_workspace_id')::uuid,'PITCH_DECK_RECORD','Private considered',null,false,false)->>'artifactId')::uuid from logged_projects where label='Individual';
+reset role;

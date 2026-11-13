@@ -1,0 +1,27 @@
+import {beforeEach,expect,it,vi} from 'vitest';
+vi.mock('server-only',()=>({}));
+const m=vi.hoisted(()=>({actor:vi.fn(),work:vi.fn(),rpc:vi.fn()}));
+vi.mock('@/lib/auth/authorization',async original=>({...await original<typeof import('@/lib/auth/authorization')>(),getAuthorizationContext:m.actor}));
+vi.mock('@/lib/db/server',()=>({createServerSupabaseClient:async()=>({rpc:m.rpc})}));
+vi.mock('@/features/progress/current-work',()=>({getMyCurrentWork:m.work}));
+import {getMyLearningProgress} from '@/features/progress/learning-progress';
+import {learningProgressCountsSchema} from '@/features/progress/learning-progress-schema';
+const id=(n:number)=>'00000000-0000-4000-8000-'+String(n).padStart(12,'0');
+const identity=(n:number)=>({id:id(n),name:'Context '+n});
+const session=(n:number)=>({id:id(n),title:'Session '+n,sessionNumber:n,sequence:n});
+const context=(n:number)=>({id:id(n),enrollmentId:id(10+n),course:identity(20+n),cohort:identity(30+n),project:identity(40+n),workspace:{id:id(50+n),type:n===1?'PERSONAL':'TEAM'},team:n===1?null:identity(60+n),activities:[{session:session(1),status:'active',availability:{available:false}},{session:session(2),status:null,availability:{available:true}},{session:session(3),status:'completed',availability:{available:false}}]});
+const counts=(total=3,completed=1)=>({requiredActivitiesTotal:total,completedRequiredActivities:completed,inProgressActivities:0,blockedActivities:0,notStartedActivities:total-completed,optionalActivities:{total:2,completed:2},completionPercentage:total===0?null:Math.round(completed*1000/total)/10});
+beforeEach(()=>{vi.resetAllMocks();m.actor.mockResolvedValue({userId:id(100)});m.work.mockResolvedValue({contexts:[context(1),context(2)]});m.rpc.mockResolvedValue({data:counts(),error:null});});
+it('returns distinct authorized execution contexts and all factual current Sessions without choosing a winner',async()=>{
+ const result=await getMyLearningProgress();expect(result.contexts).toHaveLength(2);expect(result.contexts[0].currentSessions).toEqual([session(1),session(2)]);
+ expect(result.contexts.map(c=>c.progress.completionPercentage)).toEqual([33.3,33.3]);
+ expect(m.rpc).toHaveBeenNthCalledWith(1,'get_my_learning_progress',{target_project:id(41),target_workspace:id(51),target_cohort:id(31),target_team:null});
+ expect(m.rpc).toHaveBeenNthCalledWith(2,'get_my_learning_progress',{target_project:id(42),target_workspace:id(52),target_cohort:id(32),target_team:id(62)});
+});
+it.each([[0,0,null],[3,0,0],[3,1,33.3],[3,2,66.7],[3,3,100]])('validates exact unweighted denominator %i and numerator %i', (total,completed,percentage)=>{expect(learningProgressCountsSchema.parse(counts(total!,completed!)).completionPercentage).toBe(percentage);});
+it('optional completion cannot inflate required percentage or inconsistent totals',()=>{expect(learningProgressCountsSchema.safeParse({...counts(),completionPercentage:100}).success).toBe(false);expect(learningProgressCountsSchema.safeParse({...counts(),blockedActivities:1}).success).toBe(false);});
+it.each([{userId:id(101)},{projectId:id(42)},{teamId:id(62)},{percentage:100}])('rejects spoofed input before I/O %j',async input=>{await expect(getMyLearningProgress(input)).rejects.toMatchObject({code:'VALIDATION_ERROR'});expect(m.work).not.toHaveBeenCalled();});
+it('scope revocation from database or final canonical discovery removes the context',async()=>{m.rpc.mockResolvedValueOnce({data:null,error:null});expect((await getMyLearningProgress()).contexts.map(c=>c.id)).toEqual([id(2)]);m.work.mockResolvedValueOnce({contexts:[context(1),context(2)]}).mockResolvedValueOnce({contexts:[]});expect((await getMyLearningProgress()).contexts).toEqual([]);});
+it('malformed/private response and database error fail closed',async()=>{for(const value of [{data:{...counts(),privateBody:'hidden'},error:null},{data:counts(),error:{code:'22023'}}]){m.rpc.mockResolvedValue(value);await expect(getMyLearningProgress()).rejects.toMatchObject({code:'FORBIDDEN'});}});
+it('identity change fails closed',async()=>{m.actor.mockResolvedValueOnce({userId:id(100)}).mockResolvedValue({userId:id(101)});await expect(getMyLearningProgress()).rejects.toMatchObject({code:'FORBIDDEN'});});
+it('unauthorized empty contexts cause no progress lookup',async()=>{m.work.mockResolvedValue({contexts:[]});expect(await getMyLearningProgress()).toEqual({contexts:[]});expect(m.rpc).not.toHaveBeenCalled();});

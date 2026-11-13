@@ -1,0 +1,18 @@
+import {beforeEach,expect,it,vi} from "vitest";
+vi.mock("server-only",()=>({}));
+const {context,client,rpc}=vi.hoisted(()=>({context:vi.fn(),client:vi.fn(),rpc:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:context}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:client}));
+import {updateArtifactDraft} from "@/features/artifacts/update-draft";
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
+const input={artifactVersionId:id(1),expectedDraftRevision:0,contentSnapshot:{z:1,a:2}};
+const row={id:id(1),artifact_id:id(2),version_number:1,version_label:null,draft_revision:1,content_snapshot:{a:2,z:1},change_summary:"Existing",status:"DRAFT",created_by:id(3),created_at:"2026-10-07T00:00:00Z",previous_version_id:null,approved_by:null,approved_at:null,approval_note:null};
+beforeEach(()=>{context.mockReset().mockResolvedValue({userId:id(3)});rpc.mockReset().mockResolvedValue({data:row,error:null});client.mockReset().mockResolvedValue({rpc});});
+it("saves via CAS and accepts PostgreSQL JSONB key ordering",async()=>{expect(await updateArtifactDraft(input)).toEqual(row);expect(rpc).toHaveBeenCalledExactlyOnceWith("update_artifact_draft",{target_version:id(1),expected_revision:0,snapshot:input.contentSnapshot,summary:null,set_summary:false});});
+it("explicit nullable summary differs from omission",async()=>{rpc.mockResolvedValue({data:{...row,change_summary:null},error:null});await updateArtifactDraft({...input,changeSummary:null});expect(rpc.mock.calls[0][1].set_summary).toBe(true);});
+it.each([-1,0.5,2147483648,undefined,"0"])("rejects invalid expected counter %s",async expectedDraftRevision=>{await expect(updateArtifactDraft({...input,expectedDraftRevision})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it.each(["ownerUserId","role","status","draft_revision","versionNumber","createdBy","workspaceId"])("rejects forged %s",async key=>{await expect(updateArtifactDraft({...input,[key]:id(9)})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it.each([["23505","CONFLICT"],["55000","INVALID_STATE"],["42501","NOT_FOUND"],["22003","VALIDATION_ERROR"]])("maps %s without diagnostics",async(code,expected)=>{rpc.mockResolvedValue({data:null,error:{code,message:"secret snapshot and owner"}});await expect(updateArtifactDraft(input)).rejects.toMatchObject({code:expected});await expect(updateArtifactDraft(input)).rejects.not.toHaveProperty("message","secret snapshot and owner");});
+it("does not retry a stale write",async()=>{rpc.mockResolvedValue({data:null,error:{code:"23505"}});await expect(updateArtifactDraft(input)).rejects.toMatchObject({code:"CONFLICT"});expect(rpc).toHaveBeenCalledTimes(1);});
+it("fails closed on actor switch",async()=>{context.mockResolvedValueOnce({userId:id(3)}).mockResolvedValue({userId:id(9)});await expect(updateArtifactDraft(input)).rejects.toMatchObject({code:"NOT_FOUND"});expect(rpc).not.toHaveBeenCalled();});
+it("requires a server-provided incremented token",async()=>{rpc.mockResolvedValue({data:{...row,draft_revision:0},error:null});await expect(updateArtifactDraft(input)).rejects.toMatchObject({code:"NOT_FOUND"});});

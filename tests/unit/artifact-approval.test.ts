@@ -1,0 +1,25 @@
+import {beforeEach,expect,it,vi} from "vitest";
+vi.mock("server-only",()=>({}));
+const {context,rpc,notify}=vi.hoisted(()=>({context:vi.fn(),rpc:vi.fn(),notify:vi.fn()}));
+vi.mock("@/features/notifications/approval",()=>({notifyArtifactApproved:notify}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:context}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc})}));
+import {approveArtifact} from "@/features/artifacts/approve";
+const id=(n:number)=>`00000000-0000-4000-8000-${String(n).padStart(12,"0")}`;
+const row={id:id(1),artifact_id:id(2),artifact_version_id:id(3),activity_instance_id:id(4),submitted_by:id(5),reviewer_user_id:id(6),submitted_at:"2026-10-07T00:00:00Z",status:"APPROVED"};
+beforeEach(()=>{notify.mockReset();context.mockReset().mockResolvedValue({userId:id(6)});rpc.mockReset().mockResolvedValue({data:row,error:null});});
+it("approves through caller-bound RPC with trimmed optional note",async()=>{expect(await approveArtifact({submissionId:id(1),approvalNote:" Approve "})).toEqual(row);expect(rpc).toHaveBeenCalledWith("approve_artifact",{target_submission:id(1),approval_note_input:"Approve"});expect(notify).toHaveBeenCalledExactlyOnceWith(row.id);expect(rpc.mock.invocationCallOrder[0]).toBeLessThan(notify.mock.invocationCallOrder[0]);});
+it("omitted note becomes null",async()=>{await approveArtifact({submissionId:id(1)});expect(rpc).toHaveBeenCalledWith("approve_artifact",{target_submission:id(1),approval_note_input:null});});
+it.each(["artifactId","artifactVersionId","reviewerUserId","approvedBy","approvedAt","currentVersionId","versionStatus","submissionStatus","previousCurrentVersionId","actorId"])("rejects privileged field %s",async key=>{await expect(approveArtifact({submissionId:id(1),[key]:id(9)})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+it.each(["", " \t ",null])("rejects invalid supplied note %j",async note=>{await expect(approveArtifact({submissionId:id(1),approvalNote:note})).rejects.toMatchObject({code:"VALIDATION_ERROR"});});
+it("requires verified identity",async()=>{const {AuthorizationError}=await import("@/lib/auth/authorization");context.mockRejectedValue(new AuthorizationError("AUTH_REQUIRED"));await expect(approveArtifact({submissionId:id(1)})).rejects.toMatchObject({code:"AUTH_REQUIRED"});expect(rpc).not.toHaveBeenCalled();});
+it("denies identity change",async()=>{context.mockResolvedValueOnce({userId:id(6)}).mockResolvedValue({userId:id(9)});await expect(approveArtifact({submissionId:id(1)})).rejects.toMatchObject({code:"FORBIDDEN"});});
+it.each([{id:id(9)},{status:"UNDER_REVIEW"},{reviewer_user_id:id(9)},{submitted_by:id(6)}])("rejects inconsistent result %j",async override=>{rpc.mockResolvedValue({data:{...row,...override}});await expect(approveArtifact({submissionId:id(1)})).rejects.toMatchObject({code:"FORBIDDEN"});});
+it("hides private provider details",async()=>{rpc.mockResolvedValue({error:{code:"42501",message:"Private title"}});await expect(approveArtifact({submissionId:id(1)})).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});});
+it("maps changed-note conflicts safely",async()=>{rpc.mockResolvedValue({error:{code:"22023"}});await expect(approveArtifact({submissionId:id(1)})).rejects.toMatchObject({code:"VALIDATION_ERROR"});});
+it.each(["after-validation","supersession","version","before-pointer","pointer","submission","action","before-audit","audit","notification"])("AT-TX-001 RPC failure at %s never returns a successful approval",async stage=>{rpc.mockResolvedValue({data:row,error:{code:"P0002",message:`AT-TX-001 injected ${stage}`}});await expect(approveArtifact({submissionId:id(1)})).rejects.toMatchObject({code:"FORBIDDEN",message:"Access denied."});expect(notify).not.toHaveBeenCalled();});
+it.each(["failAtStep","failureStage","fault"])("rejects client-controlled fault hook %s",async key=>{await expect(approveArtifact({submissionId:id(1),[key]:"audit"})).rejects.toMatchObject({code:"VALIDATION_ERROR"});expect(rpc).not.toHaveBeenCalled();});
+
+it.each(['42501','23514','22023'])('failed approval %s never dispatches',async code=>{rpc.mockResolvedValue({error:{code}});await expect(approveArtifact({submissionId:id(1)})).rejects.toThrow();expect(notify).not.toHaveBeenCalled();});
+it('rejects recipient spoofing',async()=>{await expect(approveArtifact({submissionId:id(1),recipientUserId:id(5)})).rejects.toMatchObject({code:'VALIDATION_ERROR'});expect(notify).not.toHaveBeenCalled();});
+it('does not dispatch after identity changes',async()=>{context.mockResolvedValueOnce({userId:id(6)}).mockResolvedValue({userId:id(9)});await expect(approveArtifact({submissionId:id(1)})).rejects.toThrow();expect(notify).not.toHaveBeenCalled();});

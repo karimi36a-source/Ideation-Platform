@@ -1,0 +1,8 @@
+.overview { max-width: 75rem; margin: 2rem auto; padding: 0 1rem; font-family: system-ui, sans-serif; line-height: 1.5; color: #182436; }
+.team { margin: 1rem 0; border: 1px solid #9baaba; border-radius: .5rem; padding: 1rem; }
+.team header { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .5rem; }
+.project { border-top: 1px solid #ccd3dc; margin-top: .75rem; padding-top: .5rem; overflow-wrap: anywhere; }
+.callout { padding: .5rem .75rem; border-left: .25rem solid #785300; background: #fff5d8; }
+.overview select { font: inherit; padding: .4rem; color: inherit; background: white; border: 1px solid #64748b; }
+.overview a { color: #124c96; text-decoration: underline; }
+.overview a:focus-visible, .overview select:focus-visible { outline: 3px solid #124c96; outline-offset: 4px; }

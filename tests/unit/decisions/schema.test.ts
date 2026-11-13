@@ -1,0 +1,17 @@
+import {it,expect} from "vitest";
+import {decisionSchema,decisionOptionSchema,decisionParticipantSchema,decisionLinkSchema,decisionStatusSchema,decisionMethodSchema,decisionLinkEntityTypeSchema} from "@/features/decisions/schema";
+const id="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+const decision={id,project_id:id,workspace_id:id,activity_instance_id:null,title:"Decision",question:"Which approach?",method:"DISCUSSION",outcome:null,reasoning:null,status:"DRAFT",decision_owner_user_id:id,decided_at:null};
+const option={id,decision_id:id,label:"Option",description:null,selected:false,development_object_id:null};
+const participant={id,decision_id:id,user_id:id,role:"participant",position:null,comment:null};
+const link={id,decision_id:id,linked_entity_type:"DEVELOPMENT_OBJECT",linked_entity_id:id,relationship_type:"context"};
+it("exposes exactly approved status/method/link vocabularies",()=>{expect(decisionStatusSchema.options).toEqual(["DRAFT","FINALIZED","SUPERSEDED","ARCHIVED"]);expect(decisionMethodSchema.options).toEqual(["DOT_VOTE","DISCUSSION","CONSENSUS","OTHER"]);expect(decisionLinkEntityTypeSchema.options).toEqual(["VOTING_SESSION","ARTIFACT","DEVELOPMENT_OBJECT","EVIDENCE","AI_OUTPUT","DECISION"]);});
+it.each(decisionStatusSchema.options)("stores %s without defining a transition",status=>{expect(decisionSchema.parse({...decision,status}).status).toBe(status);});
+it.each(decisionMethodSchema.options)("stores distinct Decision method %s",method=>{expect(decisionSchema.parse({...decision,method}).method).toBe(method);});
+it.each([{status:"OPEN"},{status:"APPROVED"},{method:"FIST_TO_FIVE"},{method:"PLANNING_POKER"},{title:" "},{question:""},{project_id:"bad"},{decision_owner_user_id:"bad"},{winner:id},{vote_count:3}])("rejects invalid schema extension %j",patch=>{expect(decisionSchema.safeParse({...decision,...patch}).success).toBe(false);});
+it("accepts DRAFT with nullable finalization fields and optional Activity",()=>{expect(decisionSchema.parse(decision)).toEqual(decision);expect(decisionSchema.safeParse({...decision,activity_instance_id:id}).success).toBe(true);});
+it("supports label-only and canonical Object options with no single-selected constraint",()=>{expect(decisionOptionSchema.parse(option)).toEqual(option);expect(decisionOptionSchema.safeParse({...option,selected:true,development_object_id:id}).success).toBe(true);});
+it.each(["participant","Team Lead","Master","Mentor","other human involvement"])("stores nonblank contextual role %s without platform authority",role=>{expect(decisionParticipantSchema.parse({...participant,role}).role).toBe(role);});
+it.each(["", " "])("rejects blank role/label/relationship %j",value=>{expect(decisionParticipantSchema.safeParse({...participant,role:value}).success).toBe(false);expect(decisionOptionSchema.safeParse({...option,label:value}).success).toBe(false);expect(decisionLinkSchema.safeParse({...link,relationship_type:value}).success).toBe(false);});
+it.each(decisionLinkEntityTypeSchema.options)("preserves schema extension type %s without runtime creation",linked_entity_type=>{expect(decisionLinkSchema.parse({...link,linked_entity_type}).linked_entity_type).toBe(linked_entity_type);});
+it("rejects arbitrary linked type and extra authorization fields",()=>{expect(decisionLinkSchema.safeParse({...link,linked_entity_type:"CUSTOM"}).success).toBe(false);expect(decisionParticipantSchema.safeParse({...participant,canApprove:true}).success).toBe(false);});

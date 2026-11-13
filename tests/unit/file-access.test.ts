@@ -1,0 +1,43 @@
+import {beforeEach,describe,expect,it,vi} from "vitest";
+import {fileAccessLifetime,getFileAccessSchema} from "@/features/files/access-schema";
+vi.mock("server-only",()=>({}));
+const m=vi.hoisted(()=>({auth:vi.fn(),read:vi.fn(),sign:vi.fn(),bucket:vi.fn(),rpc:vi.fn(),canonical:vi.fn()}));
+vi.mock("@/lib/auth/authorization",async original=>({...await original<typeof import("@/lib/auth/authorization")>(),getAuthorizationContext:m.auth}));
+vi.mock("@/lib/db/server",()=>({createServerSupabaseClient:async()=>({rpc:m.rpc,from:()=>({select:()=>({eq:()=>({maybeSingle:m.read})})})})}));
+vi.mock("@/lib/validation/env-server",()=>({getServerEnv:()=>({NEXT_PUBLIC_SUPABASE_URL:'https://example.test',SUPABASE_SECRET_KEY:'private-test-only'})}));
+vi.mock("@supabase/supabase-js",()=>({createClient:()=>({rpc:m.canonical,storage:{getBucket:m.bucket,from:()=>({createSignedUrl:m.sign})}})}));
+import {getFileAccess} from "@/features/files/access";
+import {AuthorizationError} from "@/lib/auth/authorization";
+const id='00000000-0000-4000-8000-000000006004';
+const row={id,uploaded_by:id,workspace_id:id,project_id:null,storage_reference:`workspaces/${id}/files/${id}`,filename:'private.txt',mime_type:'text/plain',size:3,status:'active',created_at:'2026-10-26T00:00:00Z',updated_at:'2026-10-26T00:00:00Z',updated_by:id,archived_at:null};
+describe('approved signed download contract',()=>{
+ it('defaults to 60 seconds',()=>expect(fileAccessLifetime(undefined)).toBe(60));
+ it.each(['1','60','300'])('accepts server lifetime %s',v=>expect(fileAccessLifetime(v)).toBe(Number(v)));
+ it.each(['0','301','-1','1.5','','NaN','Infinity',' 60','1e2'])('rejects invalid configuration %s',v=>expect(()=>fileAccessLifetime(v)).toThrow());
+ it.each(['workspaceId','projectId','storageReference','storagePath','bucket','expiry','expiresIn','actorId','signedUrl','token','accessGrant'])('rejects client override %s',key=>expect(getFileAccessSchema.safeParse({fileId:id,[key]:id}).success).toBe(false));
+ it.each([{},null,{fileId:'bad'},{fileId:12}])('rejects malformed input',input=>expect(getFileAccessSchema.safeParse(input).success).toBe(false));
+});
+describe('server signing boundary',()=>{
+ beforeEach(()=>{vi.resetAllMocks();vi.unstubAllEnvs();m.rpc.mockResolvedValue({data:false,error:null});m.canonical.mockResolvedValue({data:row,error:null});m.auth.mockResolvedValue({userId:id});m.read.mockResolvedValue({data:row,error:null});m.bucket.mockResolvedValue({data:{public:false},error:null});m.sign.mockResolvedValue({data:{signedUrl:`https://example.test/storage/v1/object/sign/fici-private-files/${row.storage_reference}?token=test-only`},error:null});});
+ it('signs exact canonical path and returns temporary capability only',async()=>{const r=await getFileAccess({fileId:id});expect(r.expiresIn).toBe(60);expect(Object.keys(r).sort()).toEqual(['expiresAt','expiresIn','signedUrl']);expect(m.sign).toHaveBeenCalledWith(row.storage_reference,60);expect(m.read).toHaveBeenCalledTimes(2);});
+ it('explicit exact FILE authorization uses server-only canonical lookup and rechecks twice',async()=>{
+  m.read.mockResolvedValue({data:null,error:null});m.rpc.mockResolvedValue({data:true,error:null});
+  expect((await getFileAccess({fileId:id})).expiresIn).toBe(60);
+  expect(m.rpc).toHaveBeenCalledTimes(2);expect(m.rpc).toHaveBeenCalledWith('authorize_shared_file_access',{target_file:id});expect(m.canonical).toHaveBeenCalledTimes(2);
+ });
+ it('normal M12 authority needs no Share fallback',async()=>{await getFileAccess({fileId:id});expect(m.rpc).not.toHaveBeenCalled();expect(m.canonical).not.toHaveBeenCalled();});
+ it('no exact FILE Share never performs privileged lookup or signing',async()=>{m.read.mockResolvedValue({data:null,error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.canonical).not.toHaveBeenCalled();expect(m.sign).not.toHaveBeenCalled();});
+ it('Share revocation during signing withholds capability',async()=>{m.read.mockResolvedValue({data:null,error:null});m.rpc.mockResolvedValueOnce({data:true,error:null}).mockResolvedValueOnce({data:false,error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.sign).toHaveBeenCalledTimes(1);});
+ it('wrong canonical File from privileged provider never signs',async()=>{m.read.mockResolvedValue({data:null,error:null});m.rpc.mockResolvedValue({data:true,error:null});m.canonical.mockResolvedValue({data:{...row,id:'00000000-0000-4000-8000-000000009999'},error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.sign).not.toHaveBeenCalled();});
+ it('archived exact shared File retains canonical download semantics',async()=>{m.read.mockResolvedValue({data:null,error:null});m.rpc.mockResolvedValue({data:true,error:null});m.canonical.mockResolvedValue({data:{...row,status:'archived',archived_at:row.created_at},error:null});expect((await getFileAccess({fileId:id})).expiresIn).toBe(60);});
+ it.each([null,'true',{},1])('nonboolean RPC result fails closed %#',async data=>{m.read.mockResolvedValue({data:null,error:null});m.rpc.mockResolvedValue({data,error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.canonical).not.toHaveBeenCalled();});
+ it('anonymous never signs',async()=>{m.auth.mockRejectedValue(new AuthorizationError('AUTH_REQUIRED'));await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'AUTH_REQUIRED'});expect(m.sign).not.toHaveBeenCalled();});
+ it('unreadable or nonexistent File never signs',async()=>{m.read.mockResolvedValue({data:null,error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.sign).not.toHaveBeenCalled();});
+ it('M12.10 currently authorized archived File retains signed access',async()=>{m.read.mockResolvedValue({data:{...row,status:'archived',archived_at:row.created_at},error:null});expect((await getFileAccess({fileId:id})).expiresIn).toBe(60);expect(m.sign).toHaveBeenCalledWith(row.storage_reference,60);});
+ it('invalid server config fails closed',async()=>{vi.stubEnv('FICI_FILE_ACCESS_TTL_SECONDS','301');await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.sign).not.toHaveBeenCalled();});
+ it('public bucket fails closed',async()=>{m.bucket.mockResolvedValue({data:{public:true},error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.sign).not.toHaveBeenCalled();});
+ it('provider error has no private details',async()=>{m.sign.mockRejectedValue(Error('secret provider detail'));await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND',message:expect.not.stringContaining('secret provider detail')});});
+ it('revocation during signing withholds URL',async()=>{m.read.mockResolvedValueOnce({data:row,error:null}).mockResolvedValueOnce({data:null,error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});});
+ it('identity switch withholds URL',async()=>{m.auth.mockResolvedValueOnce({userId:id}).mockResolvedValue({userId:'foreign'});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});expect(m.sign).not.toHaveBeenCalled();});
+ it('provider cannot redirect bearer result to another origin',async()=>{m.sign.mockResolvedValue({data:{signedUrl:'https://foreign.test/?token=test'},error:null});await expect(getFileAccess({fileId:id})).rejects.toMatchObject({code:'NOT_FOUND'});});
+});

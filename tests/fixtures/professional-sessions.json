@@ -1,0 +1,92 @@
+[
+  {
+    "id": "00000000-0000-4000-8000-000000000701",
+    "session_number": 1,
+    "title": "Think Like an Inventor",
+    "description": "No major structured invention artifact is required.\n\nPossible stored output:\n\n- Personal Reflection / Readiness Notes\n- early problem observations",
+    "learning_goal": "Build foundational understanding of:\n\n- creativity,\n- inventor mindset,\n- experimentation,\n- failure and resilience,\n- invention vs idea vs innovation.",
+    "sequence": 1,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000702",
+    "session_number": 2,
+    "title": "The SCAMPER Framework",
+    "description": "Teach the seven SCAMPER lenses and the FICI holistic-to-detail method.",
+    "learning_goal": "Teach the seven SCAMPER lenses and the FICI holistic-to-detail method.",
+    "sequence": 2,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000703",
+    "session_number": 3,
+    "title": "SCAMPER Applied Workshop",
+    "description": "Turn one selected SCAMPER idea into a developed invention concept.",
+    "learning_goal": "Turn one selected SCAMPER idea into a developed invention concept.",
+    "sequence": 3,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000704",
+    "session_number": 4,
+    "title": "Brainstorming & Problem Storming",
+    "description": "Expand the concept before evaluation.",
+    "learning_goal": "Expand the concept before evaluation.",
+    "sequence": 4,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000705",
+    "session_number": 5,
+    "title": "Idea Evaluation & Voting",
+    "description": "Convert multiple options and disagreement into a structured team decision.",
+    "learning_goal": "Convert multiple options and disagreement into a structured team decision.",
+    "sequence": 5,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000706",
+    "session_number": 6,
+    "title": "Affinity Diagram",
+    "description": "Organize accumulated information into an early invention structure.",
+    "learning_goal": "Organize accumulated information into an early invention structure.",
+    "sequence": 6,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000707",
+    "session_number": 7,
+    "title": "Mind Mapping",
+    "description": "Visualize the entire invention and identify the minimum essential invention structure.",
+    "learning_goal": "Visualize the entire invention and identify the minimum essential invention structure.",
+    "sequence": 7,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000708",
+    "session_number": 8,
+    "title": "Patent Document & Reading Basics",
+    "description": "Teach participants how to understand and navigate patent documents.",
+    "learning_goal": "Teach participants how to understand and navigate patent documents.",
+    "sequence": 8,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000709",
+    "session_number": 9,
+    "title": "Patent Search & Comparative Analysis",
+    "description": "Build an evidence-based picture of what already exists and identify potential technical gaps.",
+    "learning_goal": "Build an evidence-based picture of what already exists and identify potential technical gaps.",
+    "sequence": 9,
+    "status": "active"
+  },
+  {
+    "id": "00000000-0000-4000-8000-000000000710",
+    "session_number": 10,
+    "title": "AI-Assisted Invention Refinement",
+    "description": "Connect all previous work into a structured, evidence-based refinement process.",
+    "learning_goal": "Connect all previous work into a structured, evidence-based refinement process.",
+    "sequence": 10,
+    "status": "active"
+  }
+]
