@@ -41,7 +41,7 @@ function define(taskType:AiTaskType,allowedRole:z.infer<typeof aiPromptRoleSchem
 }
 // Contracts hold no prompt bodies, credentials, provider models, source IDs or
 // data access. Template methodology resolves by this role/activity pair later.
-const tasks=freeze({
+const tasks=freeze<unknown>({
  SCAMPER_ASSISTANCE:define('SCAMPER_ASSISTANCE','STRUCTURED_CREATIVITY_ASSISTANT','scamper',context(['CURRENT_ARTIFACT','COURSE_CONTEXT'],['CURRENT_PROJECT','GAP']),'SUGGESTION',['technique','original_element','proposed_change','reasoning','potential_benefit','risk_or_unknown'],'AI_STANDARD'),
  BRAINSTORMING_ASSISTANCE:define('BRAINSTORMING_ASSISTANCE','BRAINSTORMING_FACILITATOR','brainstorming',context(['CURRENT_ARTIFACT','COURSE_CONTEXT'],['CURRENT_PROJECT','GAP','BRAINSTORM']),'SUGGESTION',['candidate_options','different_perspectives','assumptions','verification_needed'],'AI_STANDARD'),
  SYSTEM_STRUCTURE_ANALYSIS:define('SYSTEM_STRUCTURE_ANALYSIS','SYSTEM_STRUCTURE_ANALYST','mind_map',context(['CURRENT_ARTIFACT','COURSE_CONTEXT'],['CURRENT_PROJECT','GAP','EVIDENCE','TEAM_DECISION']),'ANALYSIS',['structure_observations','missing_relationships','proposed_directions','verification_needed'],'AI_DEEP'),
@@ -50,7 +50,7 @@ const tasks=freeze({
  COMPARATIVE_ANALYSIS:define('COMPARATIVE_ANALYSIS','COMPARATIVE_CRITICAL_ANALYST','comparison',context(['CURRENT_ARTIFACT'],['PRIOR_APPROVED_OUTPUT','PATENT','EVIDENCE','GAP','TEAM_DECISION','INSTRUCTOR_FEEDBACK','COURSE_CONTEXT']),'COMPARISON',['similarities','differences','assumptions','source_references','verification_needed'],'AI_DEEP'),
  CRITICAL_REVIEW:define('CRITICAL_REVIEW','CRITICAL_REVIEWER','review',context(['CURRENT_ARTIFACT'],['PRIOR_APPROVED_OUTPUT','EVIDENCE','GAP','TEAM_DECISION','INSTRUCTOR_FEEDBACK','COURSE_CONTEXT']),'ANALYSIS',['observations','weak_assumptions','open_questions','verification_needed'],'AI_DEEP'),
  SESSION10_GAP_REFINEMENT:define('SESSION10_GAP_REFINEMENT','COMPARATIVE_CRITICAL_ANALYST','comparison',context(['CURRENT_ARTIFACT','GAP','COURSE_CONTEXT'],['CURRENT_PROJECT','PRIOR_APPROVED_OUTPUT','PATENT','EVIDENCE','TEAM_DECISION','INSTRUCTOR_FEEDBACK']),'ANALYSIS',['current_state','gap','candidate_directions','impact_analysis','uncertainties','verification_needed'],'AI_DEEP'),
-});
+} satisfies Record<AiTaskType,AiTaskDefinition>) as Readonly<Record<AiTaskType,AiTaskDefinition>>;
 export class AiTaskRegistryError extends Error{
  constructor(readonly code:'UNKNOWN_TASK'|'INVALID_TASK_REQUEST'){super('AI task unavailable');this.name='AiTaskRegistryError';}
 }
