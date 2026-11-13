@@ -29,7 +29,6 @@ begin
 end $$;
 revoke all on function public.can_receive_team_chat_broadcast(text) from public,anon,authenticated,service_role;
 grant execute on function public.can_receive_team_chat_broadcast(text) to authenticated;
-alter table realtime.messages enable row level security;
 create policy fici_team_chat_broadcast_receive on realtime.messages for select to authenticated
  using(extension='broadcast' and topic=realtime.topic() and public.can_receive_team_chat_broadcast(realtime.topic()));
 -- Restrictive Team-topic guards prevent another permissive Realtime policy
