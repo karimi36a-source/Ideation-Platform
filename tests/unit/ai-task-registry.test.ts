@@ -30,10 +30,18 @@ it.each(expected)('%s has explicit canonical context partitions and all global e
  expect(context.exclusions).toEqual({unrelatedTeamOrWorkspace:true,revokedShare:true,formerTeam:true,unrevealedPeerBrainstorm:true,unrelatedChat:true,unrelatedFiles:true,siblingPrivateEntities:true,organizationWideData:true});
 });
 it.each(expected)('%s has a closed validated schema compatible with template and provider contracts', taskType=>{
- const task=getAiTaskDefinition(taskType);expect(aiPromptOutputSchema.safeParse(task.outputSchema).success).toBe(true);
- expect(task.outputSchema.type).toBe('object');expect(task.outputSchema.additionalProperties).toBe(false);
- expect(aiGenerateInputSchema.safeParse({modelProfile:task.defaultModelProfile,instructions:'FICI methodology fixture',input:'Authorized selected input fixture',outputSchema:task.outputSchema}).success).toBe(true);
- expect(Object.keys(task)).not.toContain('systemInstruction');expect(Object.keys(task)).not.toContain('taskTemplate');
+const task=getAiTaskDefinition(taskType);
+const outputSchema=task.outputSchema as unknown as {type:string;additionalProperties:boolean};
+
+expect(aiPromptOutputSchema.safeParse(outputSchema).success).toBe(true);
+expect(outputSchema.type).toBe('object');
+expect(outputSchema.additionalProperties).toBe(false);
+expect(aiGenerateInputSchema.safeParse({
+ modelProfile:task.defaultModelProfile,
+ instructions:'FICI methodology fixture',
+ input:'Authorized selected input fixture',
+ outputSchema,
+}).success).toBe(true);expect(Object.keys(task)).not.toContain('systemInstruction');expect(Object.keys(task)).not.toContain('taskTemplate');
 });
 it.each(expected)('%s requires human/evidence evaluation and grants no autonomous project actions', taskType=>{
  const task=getAiTaskDefinition(taskType);expect(task.verification).toEqual({initialStatus:'UNVERIFIED',humanReviewRequired:true,evidenceRequiredForFactualClaims:true,automaticVerification:false,automaticLegalConclusions:false});
@@ -44,7 +52,8 @@ it.each(expected)('%s is immutable including nested schemas, context, actions, v
  function frozen(value:unknown){if(value!==null&&typeof value==='object'){expect(Object.isFrozen(value)).toBe(true);Object.values(value).forEach(frozen);}}frozen(task);
  expect(()=>Reflect.set(task,'allowedRole','ADMIN')).not.toThrow();expect(task.allowedRole).not.toBe('ADMIN');
  expect(()=>{(task.context.required as unknown as string[]).push('PATENT');}).toThrow();
- expect(Reflect.set(task.outputSchema,'additionalProperties',true)).toBe(false);
+ const immutableOutputSchema=task.outputSchema as unknown as Record<string,unknown>;
+expect(Reflect.set(immutableOutputSchema,'additionalProperties',true)).toBe(false);
 });
 it.each(['','unknown','__proto__','constructor','FREE_PROMPT','CHAT','AUTONOMOUS_AGENT','APPROVE','VOTE','CHANGE_PERMISSIONS','PATENTABILITY',null,1,{},[]])('denies unknown or arbitrary unrestricted task %j',taskType=>{
  expect(()=>getAiTaskDefinition(taskType)).toThrow(expect.objectContaining({code:'UNKNOWN_TASK',message:'AI task unavailable'}));
